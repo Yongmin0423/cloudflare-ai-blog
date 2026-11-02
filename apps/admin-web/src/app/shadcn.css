@@ -1,0 +1,29 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* No Tailwind preflight: preserve the existing admin and Tiptap styles. */
+@theme inline {
+  --color-background: #ffffff;
+  --color-foreground: #242932;
+  --color-primary: #385b48;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #eef3ef;
+  --color-secondary-foreground: #385b48;
+  --color-muted: #f3f5f4;
+  --color-muted-foreground: #687181;
+  --color-accent: #eaf1ed;
+  --color-accent-foreground: #30533f;
+  --color-destructive: #a93e35;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #dce3de;
+  --color-input: #cbd2da;
+  --color-ring: #448b69;
+  --radius-lg: 0.75rem;
+  --radius-md: 0.5rem;
+  --radius-sm: 0.25rem;
+}
+
+@layer base {
+  .shadcn-button { border: 0 solid; cursor: pointer; }
+}
