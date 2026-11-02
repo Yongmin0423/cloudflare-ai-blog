@@ -1,5 +1,7 @@
-import { ComingSoon } from "@/components/admin/coming-soon";
-
+import { BlogSettingsManager } from "@/features/management/blog-settings-manager";
 export default function SettingsPage() {
-  return <ComingSoon title="블로그 설정" description="블로그의 이름과 소개 등 기본 정보를 관리하세요." />;
+  let blogUrl: string | undefined;
+  const configured = process.env.BLOG_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "");
+  try { const url = new URL(configured); if (["http:", "https:"].includes(url.protocol)) blogUrl = url.href; } catch { /* Display unconfigured state. */ }
+  return <BlogSettingsManager blogUrl={blogUrl} />;
 }

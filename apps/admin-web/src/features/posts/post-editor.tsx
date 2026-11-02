@@ -3,6 +3,10 @@
 import { EditorContent, useEditor, useEditorState, type JSONContent } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { createEditorExtensions } from "./editor-extensions";
 import { draftKey, emptyContent, emptyFields, isWebUrl, makeSlug, parseLocalDraft, validateContent, validateFields, type DraftFields, type LocalDraft } from "./editor-model";
 import type { PostSummary } from "./demo-posts";
@@ -18,6 +22,7 @@ function Preview({ fields, content }: { fields: DraftFields; content: JSONConten
 }
 
 export function PostEditor({ post }: { post?: PostSummary }) {
+  const router = useRouter();
   const [fields, setFields] = useState<DraftFields>({ ...emptyFields, title: post?.title ?? "", slug: post ? makeSlug(post.title) : "", category: post?.category ?? "미분류" });
   const [dirty, setDirty] = useState(false);
   const [message, setMessage] = useState("");
@@ -29,7 +34,11 @@ export function PostEditor({ post }: { post?: PostSummary }) {
   const [url, setUrl] = useState("");
   const [alt, setAlt] = useState("");
   const [insertError, setInsertError] = useState("");
-  const previewDialog = useRef<HTMLDialogElement>(null);
+  const [confirmation, setConfirmation] = useState<{ kind: "restore" } | { kind: "leave"; href: string } | null>(null);
+  const previewButton = useRef<HTMLButtonElement>(null);
+  const restoreButton = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
+  const allowLeave = useRef(false);
   const savingRef = useRef(false);
   const storageKey = draftKey(post?.id ?? "new");
   const slugLocked = post?.status === "published";
@@ -52,11 +61,15 @@ export function PostEditor({ post }: { post?: PostSummary }) {
 
   useEffect(() => {
     if (!dirty) return;
-    const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const beforeUnload = (event: BeforeUnloadEvent) => { if (!allowLeave.current) { event.preventDefault(); event.returnValue = ""; } };
     const onClick = (event: MouseEvent) => {
       const anchor = event.target instanceof Element ? event.target.closest("a") : null;
       if (!anchor || anchor.target === "_blank" || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0 || anchor.hash && anchor.pathname === location.pathname) return;
-      if (anchor.href !== location.href && !window.confirm("저장하지 않은 변경 사항이 있어요. 이 페이지를 떠날까요?")) { event.preventDefault(); event.stopPropagation(); }
+      if (anchor.href !== location.href && ["http:", "https:"].includes(anchor.protocol)) {
+        event.preventDefault(); event.stopPropagation();
+        returnFocus.current = anchor;
+        setConfirmation({ kind: "leave", href: anchor.href });
+      }
     };
     window.addEventListener("beforeunload", beforeUnload);
     document.addEventListener("click", onClick, true);
@@ -81,7 +94,7 @@ export function PostEditor({ post }: { post?: PostSummary }) {
     finally { savingRef.current = false; setSaving(false); }
   }
   function restore() {
-    if (!editor || !availableDraft || (dirty && !window.confirm("현재 내용을 이 브라우저에 저장한 초안으로 바꿀까요?"))) return;
+    if (!editor || !availableDraft) return;
     try {
       editor.commands.setContent(availableDraft.content, { emitUpdate: false, errorOnInvalidContent: true });
       setFields({ ...availableDraft.fields, ...(slugLocked ? { slug: makeSlug(post!.title) } : {}) });
@@ -101,14 +114,14 @@ export function PostEditor({ post }: { post?: PostSummary }) {
     if (!editor) return;
     const issues = [...validateContent(editor.getJSON()), ...(fields.coverUrl && !isWebUrl(fields.coverUrl) ? ["대표 이미지 URL을 확인해 주세요."] : [])];
     setErrors(issues); if (issues.length) return;
-    setPreviewContent(editor.getJSON()); previewDialog.current?.showModal();
+    setPreviewContent(editor.getJSON());
   }
   const tool = (label: string, run: () => void, active = false, disabled = false) => <button key={label} type="button" aria-pressed={active} disabled={!editor || disabled} onClick={run}>{label}</button>;
 
   return <>
     <div className="posts-heading"><div className="page-heading"><p className="eyebrow">WRITE YOUR STORY</p><h1>{post ? "게시글 수정" : "새 글 작성"}</h1><p>{post ? "샘플 글을 수정하고 브라우저에 초안을 보관하세요." : "생각을 글로 옮기고, 발행 전 모습을 확인하세요."}</p></div><Link className="outline-button" href="/posts">목록으로</Link></div>
     <div className="demo-notice"><p><strong>브라우저 임시 저장 단계</strong> · 서버 저장·R2 업로드·실제 발행은 아직 연결되지 않았어요. {post ? "샘플 목록에는 수정이 반영되지 않아요." : "새 글은 최근 저장한 초안 1개를 이 브라우저에 보관해요."}</p></div>
-    {availableDraft && <div className="restore-banner"><span>이 글의 브라우저 저장본이 있어요. <time dateTime={availableDraft.savedAt}>{new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Seoul" }).format(new Date(availableDraft.savedAt))}</time></span><button className="outline-button" type="button" onClick={restore}>저장본 불러오기</button></div>}
+    {availableDraft && <div className="restore-banner"><span>이 글의 브라우저 저장본이 있어요. <time dateTime={availableDraft.savedAt}>{new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Seoul" }).format(new Date(availableDraft.savedAt))}</time></span><button ref={restoreButton} className="outline-button" type="button" onClick={() => { if (dirty) { returnFocus.current = restoreButton.current; setConfirmation({ kind: "restore" }); } else restore(); }}>저장본 불러오기</button></div>}
     {errors.length > 0 && <div className="editor-errors" role="alert"><strong>입력 내용을 확인해 주세요.</strong><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
     <div className="editor-grid">
       <section className="editor-main" aria-label="글 작성">
@@ -141,7 +154,29 @@ export function PostEditor({ post }: { post?: PostSummary }) {
         <section><h2>검색엔진 설정</h2><label>SEO 제목<input value={fields.seoTitle} maxLength={100} placeholder="비워두면 글 제목 사용" onChange={(e) => update("seoTitle", e.target.value)} /></label><label>SEO 설명<textarea value={fields.seoDescription} maxLength={300} rows={4} onChange={(e) => update("seoDescription", e.target.value)} /></label><p className="field-help">{fields.seoDescription.length}/300자 · 검색 결과 반영은 발행 기능 연결 후 적용됩니다.</p></section>
       </aside>
     </div>
-    <div className="editor-actionbar"><p role="status">{message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "작성 후 브라우저에 초안을 저장할 수 있어요.")}</p><div><button type="button" className="outline-button" disabled={!editor} onClick={showPreview}>미리보기</button><button type="button" className="primary-link" disabled={!editor || saving} onClick={saveDraft}>{saving ? "저장 중…" : "브라우저에 초안 저장"}</button><button type="button" className="outline-button" disabled aria-describedby="publish-note">발행</button></div><small id="publish-note">실제 발행은 인증·DB·검수 기능 연결 후 사용할 수 있어요.</small></div>
-    <dialog ref={previewDialog} className="preview-dialog" aria-labelledby="preview-heading" onClose={() => setPreviewContent(null)}><div className="preview-topbar"><h2 id="preview-heading">본문 미리보기</h2><button className="outline-button" type="button" onClick={() => previewDialog.current?.close()}>닫기</button></div><p className="field-help">본문 표현 확인용입니다. 공개 블로그 레이아웃은 별도로 구현합니다.</p>{previewContent && <Preview fields={fields} content={previewContent} />}</dialog>
+    <div className="editor-actionbar"><p role="status">{message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "작성 후 브라우저에 초안을 저장할 수 있어요.")}</p><div><button ref={previewButton} type="button" className="outline-button" disabled={!editor} onClick={showPreview}>미리보기</button><button type="button" className="primary-link" disabled={!editor || saving} onClick={saveDraft}>{saving ? "저장 중…" : "브라우저에 초안 저장"}</button><button type="button" className="outline-button" disabled aria-describedby="publish-note">발행</button></div><small id="publish-note">실제 발행은 인증·DB·검수 기능 연결 후 사용할 수 있어요.</small></div>
+    <Dialog open={previewContent !== null} onOpenChange={(open) => { if (!open) setPreviewContent(null); }}>
+      <DialogContent className="management-dialog editor-preview-modal" onCloseAutoFocus={(event) => { event.preventDefault(); previewButton.current?.focus(); }}>
+        <DialogHeader><DialogTitle>본문 미리보기</DialogTitle><DialogDescription>본문 표현 확인용입니다. 공개 블로그 레이아웃은 별도로 구현합니다.</DialogDescription></DialogHeader>
+        {previewContent && <Preview fields={fields} content={previewContent} />}
+        <Button variant="outline" onClick={() => setPreviewContent(null)}>미리보기 닫기</Button>
+      </DialogContent>
+    </Dialog>
+    <AlertDialog open={confirmation !== null} onOpenChange={(open) => { if (!open) setConfirmation(null); }}>
+      <AlertDialogContent className="management-dialog" onCloseAutoFocus={(event) => { event.preventDefault(); returnFocus.current?.focus(); }}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{confirmation?.kind === "restore" ? "저장한 초안으로 바꿀까요?" : "저장하지 않고 이동할까요?"}</AlertDialogTitle>
+          <AlertDialogDescription>{confirmation?.kind === "restore" ? "현재 편집 중인 내용은 브라우저에 저장한 초안으로 대체됩니다." : "저장하지 않은 변경 사항이 있어요. 이동하면 마지막 저장 이후의 변경 내용은 사라집니다."}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction onClick={() => {
+          if (confirmation?.kind === "restore") restore();
+          else if (confirmation?.kind === "leave") {
+            const destination = new URL(confirmation.href);
+            if (destination.origin === location.origin) { setDirty(false); router.push(destination.pathname + destination.search + destination.hash); }
+            else { allowLeave.current = true; location.assign(destination.href); }
+          }
+        }}>{confirmation?.kind === "restore" ? "저장본 불러오기" : "저장하지 않고 이동"}</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </>;
 }
