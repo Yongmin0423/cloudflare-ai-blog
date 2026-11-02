@@ -57,11 +57,11 @@ export function AdminShell({ children, blogUrl }: { children: ReactNode; blogUrl
       <div className="workspace">
         <header className="topbar">
           <p><span className="breadcrumb">관리자 / </span>{current?.label ?? "관리자"}</p>
-          {blogUrl ? (
+          <div className="topbar-actions"><Link href="/login" className="auth-preview-link">인증 연결 전 · 로그인 화면</Link>{blogUrl ? (
             <a className="blog-link" href={blogUrl} target="_blank" rel="noopener noreferrer">
               블로그 보기 <span aria-hidden="true">↗</span><span className="sr-only"> (새 탭)</span>
             </a>
-          ) : <span className="domain-pending">블로그 주소 연결 전</span>}
+          ) : <span className="domain-pending">블로그 주소 연결 전</span>}</div>
         </header>
         <main id="main-content" className="main-content" tabIndex={-1}>{children}</main>
         <footer className="admin-footer">Blog Studio <span>나만의 이야기를 쌓아가는 곳</span></footer>
