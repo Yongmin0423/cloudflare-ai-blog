@@ -7,3 +7,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## 작업 진행 방식
+
+- 새 작업을 시작하기 전에 단계별 체크리스트를 먼저 보여준다.
+- 완료 단계는 [x], 미완료 단계는 [ ]로 표시하고 이번 작업 단계를 명시한다.
+- docs/todo.md를 실제 구현 상태에 맞춰 갱신한다. UI 완료와 서버 기능 완료를 구분한다.
