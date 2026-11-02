@@ -2,6 +2,8 @@
 
 관리자 화면과 개발 순서는 [화면 기획](./admin-screen-plan.md)과 [개발 TODO](./todo.md)를 기준으로 합니다.
 
+공개 사이트의 현재 디자인은 기능 검증용입니다. [공개 블로그 디자인 기획](./public-blog-design-plan.md)에 따라 사용자 레퍼런스 수령 후 수익화 운영용 배치를 검토하고 운영 배포 전에 확정합니다. 콘텐츠 데이터와 화면 표현을 분리하고, 광고 영역은 본문 JSON에 포함하지 않습니다.
+
 - apps/admin-web: 관리자 전용 Next.js 앱. 글 작성·설정·AI 작업 UI와 관리자 인증을 구현합니다.
 - apps/blog-web: 공개 블로그 전용 Next.js 앱. 공개된 콘텐츠 조회와 SEO를 구현합니다.
 - 두 앱은 layout.tsx, globals.css, next.config.ts, open-next.config.ts, wrangler.jsonc를 독립적으로 가집니다.
