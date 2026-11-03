@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog";
 import { createEditorExtensions } from "./editor-extensions";
 import { draftKey, emptyContent, emptyFields, isWebUrl, makeSlug, parseLocalDraft, validateContent, validateFields, type DraftFields, type LocalDraft } from "./editor-model";
-import type { PostSummary } from "./demo-posts";
+import { categoriesResponseSchema, postResponseSchema, postInputSchema, validationMessages, type PostDetail } from "@cloudflare-ai-blog/shared";
+import { useApiResource } from "../management/use-api-resource";
 
 function Preview({ fields, content }: { fields: DraftFields; content: JSONContent }) {
   const viewer = useEditor({ extensions: createEditorExtensions(), content, editable: false, immediatelyRender: false });
@@ -21,10 +22,24 @@ function Preview({ fields, content }: { fields: DraftFields; content: JSONConten
     )}<EditorContent editor={viewer} /></article>;
 }
 
-export function PostEditor({ post }: { post?: PostSummary }) {
+export function PostEditor({ postId }: { postId?: string }) {
+  return postId ? <ExistingPostEditor postId={postId} /> : <EditorForm />;
+}
+function ExistingPostEditor({postId}:{postId:string}) {
+  const resource=useApiResource('/api/admin/posts/'+encodeURIComponent(postId),postResponseSchema);
+  if(!resource.ready)return <p role="status">게시글을 불러오는 중이에요.</p>;
+  if(resource.error)return <div role="alert" className="editor-errors"><p>{resource.error}</p><Button onClick={resource.reload}>다시 불러오기</Button><Link href="/posts">목록으로</Link></div>;
+  if(!resource.data)return null;
+  if(resource.data.post.status==='published')return <p>발행 글 수정은 발행 흐름을 연결한 뒤 사용할 수 있어요. <Link href="/posts">목록으로</Link></p>;
+  return <EditorForm key={postId} post={resource.data.post} />;
+}
+function EditorForm({post}:{post?:PostDetail}) {
   const router = useRouter();
-  const [fields, setFields] = useState<DraftFields>({ ...emptyFields, title: post?.title ?? "", slug: post ? makeSlug(post.title) : "", category: post?.category ?? "미분류" });
+  const categories = useApiResource("/api/admin/categories", categoriesResponseSchema);
+  const [revision,setRevision]=useState(post?.revision ?? 0);
+  const [fields, setFields] = useState<DraftFields>({ ...emptyFields, title: post?.title ?? "", slug: post?.slug ?? "", category: post?.categoryId ?? "미분류", coverUrl:post?.coverUrl??"",coverAlt:post?.coverAlt??"",seoTitle:post?.seoTitle??"",seoDescription:post?.seoDescription??"" });
   const [dirty, setDirty] = useState(false);
+  const [bodyLength,setBodyLength]=useState(0);
   const [message, setMessage] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
@@ -44,10 +59,11 @@ export function PostEditor({ post }: { post?: PostSummary }) {
   const slugLocked = post?.status === "published";
   const editor = useEditor({
     extensions: createEditorExtensions(), immediatelyRender: false,
-    content: post ? { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "이 글은 편집 화면을 확인하기 위한 샘플 본문입니다. 자유롭게 수정해 보세요." }] }] } : emptyContent,
+    content: post?.content ?? emptyContent,
     editorProps: { attributes: { role: "textbox", "aria-label": "본문", "aria-multiline": "true", class: "post-body" } },
-    onUpdate: () => { setDirty(true); setMessage(""); },
-    onCreate: () => {
+    onUpdate: ({editor:current}) => { setBodyLength(current.getText().length);setDirty(true); setMessage(""); },
+    onCreate: ({editor:current}) => {
+      setBodyLength(current.getText().length);
       try { const stored = localStorage.getItem(storageKey); if (stored) setAvailableDraft(parseLocalDraft(stored)); }
       catch { setErrors(["브라우저 초안을 읽을 수 없어요. 저장소 접근 권한 또는 초안 손상 여부를 확인해 주세요. 기존 데이터는 유지됩니다."]); }
     },
@@ -56,7 +72,7 @@ export function PostEditor({ post }: { post?: PostSummary }) {
     bold: current?.isActive("bold"), italic: current?.isActive("italic"), strike: current?.isActive("strike"),
     h2: current?.isActive("heading", { level: 2 }), h3: current?.isActive("heading", { level: 3 }),
     bullet: current?.isActive("bulletList"), ordered: current?.isActive("orderedList"), quote: current?.isActive("blockquote"),
-    link: current?.isActive("link"), undo: current?.can().undo(), redo: current?.can().redo(), length: current?.getText().length ?? 0,
+    link: current?.isActive("link"), undo: current?.can().undo(), redo: current?.can().redo(),
   }) });
 
   useEffect(() => {
@@ -77,29 +93,40 @@ export function PostEditor({ post }: { post?: PostSummary }) {
   }, [dirty]);
 
   function update(key: keyof DraftFields, value: string) { setFields((previous) => ({ ...previous, [key]: value })); setDirty(true); setMessage(""); }
-  function saveDraft() {
-    if (!editor || savingRef.current) return;
+  async function saveDraft() {
+    if (!editor || savingRef.current || !categories.ready || categories.error) return;
     const issues = [...validateFields(fields), ...validateContent(editor.getJSON())];
     setErrors(issues);
     if (issues.length) return;
     savingRef.current = true; setSaving(true);
     try {
-      const record: LocalDraft = { version: 1, fields, content: editor.getJSON(), savedAt: new Date().toISOString() };
-      const serialized = JSON.stringify(record);
-      parseLocalDraft(serialized);
-      localStorage.setItem(storageKey, serialized);
-      setAvailableDraft(record); setDirty(false);
-      setMessage("이 브라우저에 초안을 저장했어요. 서버 저장이나 발행은 되지 않습니다.");
-    } catch { setErrors(["초안을 저장하지 못했어요. 브라우저 저장 공간 또는 접근 권한을 확인해 주세요. 작성 내용은 화면에 남아 있습니다."]); }
-    finally { savingRef.current = false; setSaving(false); }
+      editor.setEditable(false, false);
+      const payload=postInputSchema.safeParse({title:fields.title,slug:fields.slug,categoryId:fields.category==="미분류"?null:fields.category,content:editor.getJSON(),coverUrl:fields.coverUrl,coverAlt:fields.coverAlt,seoTitle:fields.seoTitle,seoDescription:fields.seoDescription});
+      if(!payload.success) {setErrors(validationMessages(payload.error));return;}
+      const response=await fetch(post?'/api/admin/posts/'+post.id:'/api/admin/posts',{method:post?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(post?{post:payload.data,expectedRevision:revision}:payload.data)});
+      const value=await response.json();
+      if(!response.ok)throw new Error(value && typeof value==='object' && 'error' in value && typeof value.error==='string'?value.error:'초안을 저장하지 못했어요.');
+      const saved=postResponseSchema.parse(value).post;
+      setRevision(saved.revision);setFields(previous=>({...previous,title:saved.title,slug:saved.slug}));setDirty(false);
+      setMessage('로컬 D1에 초안을 저장했어요.');
+      if(!post){allowLeave.current=true;router.replace('/posts/'+saved.id+'/edit');}
+    } catch(error) { setErrors([error instanceof Error?error.message:"저장하지 못했어요. 입력 내용은 유지됩니다."]); }
+    finally { savingRef.current = false; setSaving(false); editor.setEditable(true, false); }
   }
   function restore() {
     if (!editor || !availableDraft) return;
     try {
+      let category=availableDraft.fields.category;
+      if(category!=="미분류"){
+        const match=categories.data?.categories.find(c=>c.id===category||c.name===category);
+        if(!match)throw new Error('저장본의 카테고리가 없어 복원할 수 없어요. 카테고리를 먼저 확인해 주세요.');
+        category=match.id;
+      }
       editor.commands.setContent(availableDraft.content, { emitUpdate: false, errorOnInvalidContent: true });
-      setFields({ ...availableDraft.fields, ...(slugLocked ? { slug: makeSlug(post!.title) } : {}) });
-      setDirty(false); setErrors([]); setMessage("브라우저에 저장한 초안을 불러왔어요.");
-    } catch { setErrors(["본문 형식이 올바르지 않아 복원할 수 없어요. 저장된 초안은 유지됩니다."]); }
+      setBodyLength(editor.getText().length);
+      setFields({ ...availableDraft.fields, category, ...(slugLocked ? { slug: post!.slug } : {}) });
+      setDirty(true); setErrors([]); setMessage("브라우저 저장본을 불러왔어요. D1에 초안 저장을 눌러 반영하세요.");
+    } catch(error) { setErrors([error instanceof Error?error.message:"본문 형식을 확인해 주세요. 저장본은 유지됩니다."]); }
   }
   function insert() {
     if (!editor) return;
@@ -119,14 +146,15 @@ export function PostEditor({ post }: { post?: PostSummary }) {
   const tool = (label: string, run: () => void, active = false, disabled = false) => <button key={label} type="button" aria-pressed={active} disabled={!editor || disabled} onClick={run}>{label}</button>;
 
   return <>
-    <div className="posts-heading"><div className="page-heading"><p className="eyebrow">WRITE YOUR STORY</p><h1>{post ? "게시글 수정" : "새 글 작성"}</h1><p>{post ? "샘플 글을 수정하고 브라우저에 초안을 보관하세요." : "생각을 글로 옮기고, 발행 전 모습을 확인하세요."}</p></div><Link className="outline-button" href="/posts">목록으로</Link></div>
-    <div className="demo-notice"><p><strong>브라우저 임시 저장 단계</strong> · 서버 저장·R2 업로드·실제 발행은 아직 연결되지 않았어요. {post ? "샘플 목록에는 수정이 반영되지 않아요." : "새 글은 최근 저장한 초안 1개를 이 브라우저에 보관해요."}</p></div>
-    {availableDraft && <div className="restore-banner"><span>이 글의 브라우저 저장본이 있어요. <time dateTime={availableDraft.savedAt}>{new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Seoul" }).format(new Date(availableDraft.savedAt))}</time></span><button ref={restoreButton} className="outline-button" type="button" onClick={() => { if (dirty) { returnFocus.current = restoreButton.current; setConfirmation({ kind: "restore" }); } else restore(); }}>저장본 불러오기</button></div>}
+    <div className="posts-heading"><div className="page-heading"><p className="eyebrow">WRITE YOUR STORY</p><h1>{post ? "게시글 수정" : "새 글 작성"}</h1><p>{post ? "저장한 초안을 수정하고 로컬 D1에 반영하세요." : "생각을 글로 옮기고, 발행 전 모습을 확인하세요."}</p></div><Link className="outline-button" href="/posts">목록으로</Link></div>
+    <div className="demo-notice"><p><strong>로컬 D1 초안 저장</strong> · 본문·카테고리·검색엔진 설정을 저장해요. 실제 발행과 R2 업로드는 후속 단계입니다. 이전 브라우저 저장본은 자동 이전하지 않아요.</p></div>
+    {categories.error && <div role="alert" className="editor-errors"><p>{categories.error}</p><Button onClick={categories.reload}>카테고리 다시 불러오기</Button></div>}
+    {availableDraft && <div className="restore-banner"><span>이 글의 브라우저 저장본이 있어요. <time dateTime={availableDraft.savedAt}>{new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Seoul" }).format(new Date(availableDraft.savedAt))}</time></span><button ref={restoreButton} disabled={!categories.ready || !!categories.error || saving} className="outline-button" type="button" onClick={() => { if (dirty) { returnFocus.current = restoreButton.current; setConfirmation({ kind: "restore" }); } else restore(); }}>저장본 불러오기</button></div>}
     {errors.length > 0 && <div className="editor-errors" role="alert"><strong>입력 내용을 확인해 주세요.</strong><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
-    <div className="editor-grid">
+    <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}}><div className="editor-grid">
       <section className="editor-main" aria-label="글 작성">
         <label className="field-label" htmlFor="post-title">제목 <span>필수</span></label><input id="post-title" className="title-input" value={fields.title} maxLength={200} placeholder="제목을 입력하세요" onChange={(e) => update("title", e.target.value)} />
-        <div className="body-label"><h2>본문</h2><span>{state?.length ?? 0}자</span></div>
+        <div className="body-label"><h2>본문</h2><span>{bodyLength}자</span></div>
         <div className="editor-toolbar" role="group" aria-label="본문 서식">
           {tool("문단", () => editor?.chain().focus().setParagraph().run())}
           {tool("H2", () => editor?.chain().focus().toggleHeading({ level: 2 }).run(), state?.h2)}
@@ -149,16 +177,16 @@ export function PostEditor({ post }: { post?: PostSummary }) {
         <EditorContent editor={editor} />
       </section>
       <aside className="editor-settings" aria-label="글 설정">
-        <section><h2>글 설정</h2><label>슬러그<input value={fields.slug} disabled={slugLocked} maxLength={120} onChange={(e) => update("slug", e.target.value)} /></label>{slugLocked ? <p className="field-help">발행된 샘플 글은 URL 유지를 위해 슬러그를 잠갔어요.</p> : <button type="button" className="outline-button" onClick={() => update("slug", makeSlug(fields.title))}>제목으로 슬러그 만들기</button>}<p className="field-help">블로그 내 중복 여부는 DB 연결 후 검사합니다.</p><label>카테고리<select value={fields.category} onChange={(e) => update("category", e.target.value)}>{["미분류", "블로그 운영", "생활 정보", "일상"].map((category) => <option key={category}>{category}</option>)}</select></label></section>
+        <section><h2>글 설정</h2><label>슬러그<input value={fields.slug} disabled={slugLocked} maxLength={120} onChange={(e) => update("slug", e.target.value)} /></label>{slugLocked ? <p className="field-help">발행된 글은 URL 유지를 위해 슬러그를 잠갔어요.</p> : <button type="button" className="outline-button" onClick={() => update("slug", makeSlug(fields.title))}>제목으로 슬러그 만들기</button>}<p className="field-help">저장할 때 블로그 내 슬러그 중복을 검사해요.</p><label>카테고리<select value={fields.category} onChange={(e) => update("category", e.target.value)}><option value="미분류">미분류</option>{categories.data?.categories.map(category=><option key={category.id} value={category.id}>{category.name}</option>)}</select></label></section>
         <section><h2>대표 이미지</h2><label>대표 이미지 URL<input type="url" value={fields.coverUrl} placeholder="https://" onChange={(e) => update("coverUrl", e.target.value)} /></label><label>대표 이미지 대체 텍스트<input value={fields.coverAlt} onChange={(e) => update("coverAlt", e.target.value)} /></label><p className="field-help">지금은 URL 입력만 지원해요. 파일 업로드는 R2 연결 단계에서 추가합니다.</p></section>
         <section><h2>검색엔진 설정</h2><label>SEO 제목<input value={fields.seoTitle} maxLength={100} placeholder="비워두면 글 제목 사용" onChange={(e) => update("seoTitle", e.target.value)} /></label><label>SEO 설명<textarea value={fields.seoDescription} maxLength={300} rows={4} onChange={(e) => update("seoDescription", e.target.value)} /></label><p className="field-help">{fields.seoDescription.length}/300자 · 검색 결과 반영은 발행 기능 연결 후 적용됩니다.</p></section>
       </aside>
-    </div>
-    <div className="editor-actionbar"><p role="status">{message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "작성 후 브라우저에 초안을 저장할 수 있어요.")}</p><div><button ref={previewButton} type="button" className="outline-button" disabled={!editor} onClick={showPreview}>미리보기</button><button type="button" className="primary-link" disabled={!editor || saving} onClick={saveDraft}>{saving ? "저장 중…" : "브라우저에 초안 저장"}</button><button type="button" className="outline-button" disabled aria-describedby="publish-note">발행</button></div><small id="publish-note">실제 발행은 인증·DB·검수 기능 연결 후 사용할 수 있어요.</small></div>
+    </div></fieldset>
+    <div className="editor-actionbar"><p role="status">{message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "작성 후 로컬 D1에 초안을 저장할 수 있어요.")}</p><div><button ref={previewButton} type="button" className="outline-button" disabled={!editor} onClick={showPreview}>미리보기</button><button type="button" className="primary-link" disabled={!editor || saving || !categories.ready || !!categories.error} onClick={saveDraft}>{saving ? "저장 중…" : "D1에 초안 저장"}</button><button type="button" className="outline-button" disabled aria-describedby="publish-note">발행</button></div><small id="publish-note">실제 발행은 인증·DB·검수 기능 연결 후 사용할 수 있어요.</small></div>
     <Dialog open={previewContent !== null} onOpenChange={(open) => { if (!open) setPreviewContent(null); }}>
       <DialogContent className="management-dialog editor-preview-modal" onCloseAutoFocus={(event) => { event.preventDefault(); previewButton.current?.focus(); }}>
         <DialogHeader><DialogTitle>본문 미리보기</DialogTitle><DialogDescription>본문 표현 확인용입니다. 공개 블로그 레이아웃은 별도로 구현합니다.</DialogDescription></DialogHeader>
-        {previewContent && <Preview fields={fields} content={previewContent} />}
+        {previewContent && <Preview fields={{...fields,category:categories.data?.categories.find(c=>c.id===fields.category)?.name??"미분류"}} content={previewContent} />}
         <Button variant="outline" onClick={() => setPreviewContent(null)}>미리보기 닫기</Button>
       </DialogContent>
     </Dialog>
