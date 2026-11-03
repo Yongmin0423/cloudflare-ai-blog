@@ -4,13 +4,14 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useLocalDocument } from "@/features/management/use-local-document";
-import { categoriesKey, initialCategories, initialSettings, parseCategories, parseSettings, settingsKey } from "@/features/management/model";
+import { categoriesResponseSchema, settingsResponseSchema } from "@cloudflare-ai-blog/shared";
+import { useApiResource } from "@/features/management/use-api-resource";
 import { advanceJob, initialJobs, jobLabels, jobStages, jobsKey, parseJobs, requestErrors, retryJob, type DemoJob } from "./demo-jobs";
 
 export function AiWriting() {
   const store = useLocalDocument(jobsKey, initialJobs, parseJobs);
-  const categories = useLocalDocument(categoriesKey, initialCategories, parseCategories);
-  const settings = useLocalDocument(settingsKey, initialSettings, parseSettings);
+  const categories = useApiResource("/api/admin/categories", categoriesResponseSchema);
+  const settings = useApiResource("/api/admin/settings", settingsResponseSchema);
   const [keyword, setKeyword] = useState(""); const [category, setCategory] = useState("미분류");
   const [instructions, setInstructions] = useState(""); const [errors, setErrors] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -19,7 +20,7 @@ export function AiWriting() {
   const returnFocus = useRef<HTMLElement | null>(null);
   const selected = store.data.find((job) => job.id === selectedId);
   const disabled = !store.ready || !!store.error;
-  const formDisabled = disabled || !categories.ready || !settings.ready || !!categories.error || !!settings.error;
+  const formDisabled = disabled || !categories.ready || !settings.ready || !!categories.error || !!settings.error || !categories.data || !settings.data;
   function persist(jobs: DemoJob[]) {
     try { store.save(jobs); setJobError(""); return true; }
     catch { const error = "샘플 작업을 저장하지 못했어요. 브라우저 저장 공간과 권한을 확인해 주세요."; setMessage(error); setJobError(error); return false; }
@@ -27,7 +28,7 @@ export function AiWriting() {
   function create(event: React.FormEvent) {
     event.preventDefault(); if (formDisabled) return;
     const issues = requestErrors(keyword, instructions); if (store.data.length >= 100) issues.push("샘플 작업은 최대 100개까지 보관할 수 있어요.");
-    if (category !== "미분류" && !categories.data.some((item) => item.name === category)) issues.push("카테고리가 변경됐어요. 다시 선택해 주세요.");
+    if (category !== "미분류" && !(categories.data?.categories ?? []).some((item) => item.name === category)) issues.push("카테고리가 변경됐어요. 다시 선택해 주세요.");
     setErrors(issues); if (issues.length) return;
     const job: DemoJob = { id: crypto.randomUUID(), keyword: keyword.trim(), category, instructions, status: "queued", step: 0, createdAt: new Date().toISOString() };
     if (persist([job, ...store.data])) { setKeyword(""); setInstructions(""); setFilter("all"); setMessage("샘플 작업을 추가했어요. 실제 AI는 호출하지 않았습니다."); setSelectedId(job.id); returnFocus.current = document.getElementById("sample-submit"); }
@@ -42,11 +43,11 @@ export function AiWriting() {
     <div className="ai-layout"><section className="settings-card"><h2>새 글 생성 요청</h2><form className="management-form" noValidate onSubmit={create}>
       {errors.length > 0 && <div className="editor-errors" role="alert"><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
       <label>키워드 <span className="field-help">필수 · 글 한 편의 중심 주제</span><input value={keyword} maxLength={100} placeholder="예: 아침 시간을 여유롭게 보내는 방법" onChange={(e) => setKeyword(e.target.value)} /></label>
-      <label>카테고리<select value={category} onChange={(e) => setCategory(e.target.value)}><option>미분류</option>{categories.data.map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
+      <label>카테고리<select value={category} onChange={(e) => setCategory(e.target.value)}><option>미분류</option>{(categories.data?.categories ?? []).map((item) => <option key={item.id}>{item.name}</option>)}</select></label>
       <label>추가 작성 지시<textarea rows={4} maxLength={2000} value={instructions} placeholder="예: 초보자도 이해할 수 있도록 사례를 포함해 주세요." onChange={(e) => setInstructions(e.target.value)} /></label>
       <Button id="sample-submit" type="submit" disabled={formDisabled}>샘플 생성 흐름 시작</Button>
     </form></section>
-    <aside className="settings-card"><h2>적용 예정인 작성 기본값</h2><p>블로그 설정에 보관한 값을 보여줍니다. 실제 AI 연결 시 요청에 포함할 정보예요.</p><dl className="settings-summary"><dt>블로그</dt><dd>{settings.data.name}</dd><dt>주제</dt><dd>{settings.data.topic || "아직 설정하지 않았어요"}</dd><dt>대상 독자</dt><dd>{settings.data.audience || "아직 설정하지 않았어요"}</dd><dt>말투</dt><dd>{settings.data.tone || "미설정"}</dd><dt>작성 규칙</dt><dd>{settings.data.rules || "미설정"}</dd></dl><Link className="secondary-link" href="/settings">작성 기본값 수정 →</Link></aside></div>
+    <aside className="settings-card"><h2>적용 예정인 작성 기본값</h2><p>로컬 D1에 저장한 블로그 설정을 보여줍니다. 실제 AI 연결 시 요청에 포함할 정보예요.</p><dl className="settings-summary"><dt>블로그</dt><dd>{settings.data?.settings.name ?? "불러오는 중"}</dd><dt>주제</dt><dd>{settings.data?.settings.topic || "아직 설정하지 않았어요"}</dd><dt>대상 독자</dt><dd>{settings.data?.settings.audience || "아직 설정하지 않았어요"}</dd><dt>말투</dt><dd>{settings.data?.settings.tone || "미설정"}</dd><dt>작성 규칙</dt><dd>{settings.data?.settings.rules || "미설정"}</dd></dl><Link className="secondary-link" href="/settings">작성 기본값 수정 →</Link></aside></div>
     <section className="posts-panel ai-jobs" aria-labelledby="jobs-title"><div className="section-toolbar"><h2 id="jobs-title">생성 작업</h2><label>작업 상태<select value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">전체</option>{Object.entries(jobLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
       {!store.ready ? <p className="list-message" role="status">작업을 불러오는 중이에요.</p> : jobs.length === 0 ? <div className="list-message"><h3>표시할 작업이 없어요.</h3><p>다른 상태를 선택하거나 새 샘플 작업을 시작해 보세요.</p><Button variant="outline" onClick={() => setFilter("all")}>전체 작업 보기</Button></div> : <div className="table-scroll" role="region" aria-label="AI 작업 표" tabIndex={0}><table className="posts-table"><caption className="sr-only">키워드, 상태, 진행 단계, 요청 시각, 상세</caption><thead><tr><th scope="col">키워드</th><th scope="col">상태</th><th scope="col">진행</th><th scope="col">요청 시각</th><th scope="col">상세</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td><strong>{job.keyword}</strong><p className="field-help">{job.category}</p></td><td><span className={`job-badge job-${job.status}`}>{jobLabels[job.status]}</span></td><td>{job.step}/5</td><td><time dateTime={job.createdAt}>{new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }).format(new Date(job.createdAt))}</time></td><td><Button variant="outline" size="sm" disabled={disabled} aria-label={`${job.keyword} 작업 보기`} onClick={(event) => { returnFocus.current = event.currentTarget; setSelectedId(job.id); }}>작업 보기</Button></td></tr>)}</tbody></table></div>}
     </section>

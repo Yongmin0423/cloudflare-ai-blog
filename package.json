@@ -23,7 +23,14 @@
     "preview:admin": "pnpm --filter @cloudflare-ai-blog/admin-web run preview:worker",
     "deploy:blog": "pnpm --filter @cloudflare-ai-blog/blog-web run deploy",
     "deploy:admin": "pnpm --filter @cloudflare-ai-blog/admin-web run deploy",
-    "cf-typegen": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run cf-typegen"
+    "cf-typegen": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run cf-typegen",
+    "db:check": "node scripts/run-tool.mjs wrangler d1 execute DB --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state --command \"SELECT 1 AS connected\"",
+    "db:check:remote": "node scripts/run-tool.mjs wrangler d1 execute DB --config apps/admin-web/wrangler.jsonc --remote --command \"SELECT 1 AS connected\"",
+    "db:test:schema": "node --test packages/database/tests/schema.test.mjs",
+    "db:migrate:local": "node scripts/run-tool.mjs wrangler d1 migrations apply cloudflare-ai-blog --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state",
+    "db:test:local": "node scripts/run-tool.mjs wrangler d1 execute cloudflare-ai-blog --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state --file packages/database/tests/local-smoke.sql",
+    "db:bootstrap:local": "node scripts/run-tool.mjs wrangler d1 execute cloudflare-ai-blog --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state --file packages/database/local-bootstrap.sql",
+    "db:test:management": "node --import ./packages/database/tests/register-types.mjs --test packages/database/tests/management.test.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

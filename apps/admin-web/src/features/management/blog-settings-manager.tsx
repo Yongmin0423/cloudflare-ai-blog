@@ -1,22 +1,22 @@
 "use client";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { initialSettings, parseSettings, settingsErrors, settingsKey, type BlogSettings } from "./model";
-import { useLocalDocument } from "./use-local-document";
+import { settingsSchema, settingsResponseSchema, validationMessages, type BlogSettings } from "@cloudflare-ai-blog/shared";
+import { useApiResource } from "./use-api-resource";
 
-function SettingsForm({ initial, save, disabled, blogUrl, onSaved, onChanged }: { initial: BlogSettings; save: (value: BlogSettings) => void; disabled: boolean; blogUrl?: string; onSaved: () => void; onChanged: () => void }) {
+function SettingsForm({ initial, save, disabled, blogUrl, onSaved, onChanged }: { initial: BlogSettings; save: (value: BlogSettings) => Promise<unknown>; disabled: boolean; blogUrl?: string; onSaved: () => void; onChanged: () => void }) {
   const [fields, setFields] = useState(initial);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   function update(key: keyof BlogSettings, value: string) { setFields((previous) => ({ ...previous, [key]: value })); setDirty(true); onChanged(); }
-  function submit(event: React.FormEvent) {
+  async function submit(event: React.FormEvent) {
     event.preventDefault(); if (disabled || saving) return;
     const normalized = { ...fields, name: fields.name.trim() };
-    const issues = settingsErrors(normalized); setErrors(issues); if (issues.length) return;
+    const parsed = settingsSchema.safeParse(normalized); const issues = parsed.success ? [] : validationMessages(parsed.error); setErrors(issues); if (issues.length) return;
     setSaving(true);
-    try { save(normalized); setDirty(false); onSaved(); }
-    catch { setErrors(["설정을 저장하지 못했어요. 저장 공간과 접근 권한을 확인해 주세요. 입력 내용은 유지됩니다."]); } finally { setSaving(false); }
+    try { await save(normalized); setDirty(false); onSaved(); }
+    catch (error) { setErrors([error instanceof Error ? error.message : "설정을 저장하지 못했어요. 입력 내용은 유지됩니다."]); } finally { setSaving(false); }
   }
   return <form className="management-form settings-form" noValidate onSubmit={submit}>
     {errors.length > 0 && <div className="editor-errors" role="alert"><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
@@ -35,17 +35,17 @@ function SettingsForm({ initial, save, disabled, blogUrl, onSaved, onChanged }: 
         <label>피해야 할 표현<textarea rows={3} maxLength={3000} value={fields.avoid} onChange={(event) => update("avoid", event.target.value)} /></label>
       </section>
     </fieldset>
-    <div className="editor-actionbar"><p>{dirty ? "저장하지 않은 변경 사항이 있어요." : "저장한 설정을 확인하고 수정할 수 있어요."}</p><Button type="submit" disabled={disabled || saving}>{saving ? "저장 중…" : "브라우저에 설정 저장"}</Button></div>
+    <div className="editor-actionbar"><p>{dirty ? "저장하지 않은 변경 사항이 있어요." : "저장한 설정을 확인하고 수정할 수 있어요."}</p><Button type="submit" disabled={disabled || saving}>{saving ? "저장 중…" : "설정 저장"}</Button></div>
   </form>;
 }
 
 export function BlogSettingsManager({ blogUrl }: { blogUrl?: string }) {
-  const store = useLocalDocument(settingsKey, initialSettings, parseSettings);
+  const store = useApiResource("/api/admin/settings", settingsResponseSchema);
   const [message, setMessage] = useState("");
   return <><div className="page-heading"><p className="eyebrow">PREFERENCES</p><h1>블로그 설정</h1><p>블로그의 기본 정보와 AI 작성 방향을 정해 보세요.</p></div>
-    <div className="demo-notice"><p><strong>브라우저 임시 저장</strong> · 이 설정은 아직 공개 사이트·AI 생성에 반영되지 않아요. API 키 등 비밀값은 입력하지 마세요.</p></div>
-    {store.error && <p className="editor-errors" role="alert">{store.error}</p>}
+    <div className="demo-notice"><p><strong>로컬 D1 저장</strong> · 공개 사이트와 실제 AI 생성 연결은 다음 단계입니다. 기존 브라우저 저장본은 삭제하거나 자동 이전하지 않았어요.</p></div>
+    {store.error && <div className="editor-errors" role="alert"><p>{store.error}</p><Button variant="outline" onClick={store.reload}>다시 불러오기</Button></div>}
     <p className="management-status" role="status">{message}</p>
-    {!store.ready ? <p role="status">설정을 불러오는 중이에요.</p> : <SettingsForm key={store.snapshot} initial={store.data} save={store.save} disabled={!!store.error} blogUrl={blogUrl} onChanged={() => setMessage("")} onSaved={() => setMessage("이 브라우저에 설정을 저장했어요.")} />}
+    {!store.ready ? <p role="status">설정을 불러오는 중이에요.</p> : store.data && <SettingsForm key={store.data.updatedAt} initial={store.data.settings} save={(settings) => store.mutate("PUT", "/api/admin/settings", { settings, expectedUpdatedAt: store.data!.updatedAt })} disabled={!!store.error} blogUrl={blogUrl} onChanged={() => setMessage("")} onSaved={() => setMessage("로컬 D1에 설정을 저장했어요.")} />}
   </>;
 }

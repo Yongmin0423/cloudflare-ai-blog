@@ -139,3 +139,40 @@ GitHub 연결과 원격 배포, CI/CD는 아직 실행하지 않았습니다.
 - 모바일 로그인/대시보드/AI 화면 가로 넘침 없음. 브라우저에 'UI 검증 작업' 샘플 1개(검토 완료) 보관
 - UI 기준점을 main에 로컬 병합한 뒤 feat/data-model-d1에서 데이터 작업을 시작하는 방향으로 정리
 - 이후 실제 데이터와 인증 연결에 따라 폼/권한/업로드/발행 UI 보완을 계속 진행
+
+## 2026-11-03 — D1 연결 기반
+
+- feat/data-model-d1 브랜치에서 작업. Wrangler OAuth 재인증 및 공식 인증 설정 폴더 쓰기 권한으로 인증 저장 완료
+- 계정 조회/D1 관리 범위로 인증하고 기존 DB 없음 확인 후 cloudflare-ai-blog 생성
+- 관리자·공개 블로그에 DB 바인딩, 공통 .wrangler/state 경로, 생성된 Cloudflare 타입 반영
+- 두 앱 서버 전용 getDatabase와 상수 쿼리 health 엔드포인트 추가
+- pnpm db:check와 db:check:remote 추가. 로컬과 실제 D1 모두 SELECT 1 성공
+- Next 개발 서버 3000/3001의 /api/health/db 모두 HTTP 200 확인
+- 업무 테이블·UI 저장 전환·R2·원격 Worker 배포는 아직 수행하지 않음
+- 두 앱의 Cloudflare 타입 생성·타입 검사·린트·OpenNext Workers 빌드 통과
+- 로컬 Workers 미리보기 8787/8788에서도 /api/health/db 모두 200 확인 (검증용 프로세스 종료)
+
+## 2026-11-03 — 블로그 테이블 설계 v1
+
+- blogs, blog_writing_settings, categories, posts, post_seo, media, post_media 7개 테이블과 조회 인덱스 정의
+- 블로그별 고유 슬러그·복합 외래 키·카테고리 삭제 제한·JSON 루트 검증·발행일 조건·SEO 출처 구분·대표 이미지 단일성 적용
+- 날짜는 UTC Unix 밀리초, revision은 후속 변경 충돌·검증 버전 연결 기반
+- 인메모리 SQLite 스키마 테스트 8개 통과
+- 0001_blog_schema.sql을 공통 로컬 D1에 적용. 로컬 7개 업무 테이블 및 외래 키 오류 없음 확인
+- 로컬 검증 데이터 삽입·조회와 글 삭제 시 SEO/사용 이미지 관계 정리 확인 후 검증 데이터 제거
+- 실제 원격 D1에는 이번 스키마를 적용하지 않음. UI 저장소·R2·AI 업무 테이블도 미변경
+- 상세 설계/아직 서비스에서 구현해야 하는 계약은 docs/database-schema.md에 기록
+
+## 2026-11-03 — 카테고리·설정 로컬 D1 연결
+
+- 공통 Zod 계약, 매개변수 SQL, 블로그 범위 조회/변경과 충돌 검사를 구현
+- 카테고리·설정 UI를 API로 전환하고 AI 화면의 작성 기본값·분류 조회도 연결
+- 설정·작성 규칙은 원자적 batch, 카테고리 삭제는 실제 게시글 기준으로 제한
+- 인증 전 개발 localhost만 API 허용, production 및 다른 Origin 변경 요청 차단
+- 로컬 초기 블로그 1개 준비. 이전 브라우저 저장본은 보존하며 자동 가져오기 없음
+- Next persist.path는 .wrangler/state/v3, CLI --persist-to는 .wrangler/state로 맞춰 서로 다른 DB 파일을 읽던 문제 수정
+- Windows의 workspace symlink 권한 제약 때문에 공통 코드는 admin tsconfig source alias로 참조. Zod는 pnpm workspace 외부 의존성으로 설치
+- 계약/쿼리/접근 검사 테스트 5개 및 실제 개발 API 저장·중복·충돌·Origin·소유권 필드 거부·검증 데이터 정리 확인
+- 게시글/공개 블로그·인증·AI 실행·원격 스키마 적용은 후속 작업
+- 최종 검증: 관리자 타입 검사·린트·Next/OpenNext 빌드 통과. 화면 저장/새로고침 유지 및 production Worker API 403 확인. 검증 데이터 정리 완료.
+- DB 패키지 단독 편집 시 D1Database 전역 타입을 못 찾던 문제: 공식 @cloudflare/workers-types를 type import하고 패키지 tsconfig로 공통 별칭을 정의. 패키지 단독 타입 검사 및 관리 테스트 5개 통과.

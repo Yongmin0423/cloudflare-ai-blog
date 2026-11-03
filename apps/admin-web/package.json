@@ -10,7 +10,7 @@
     "typecheck": "node ../../scripts/run-tool.mjs next typegen && tsc --noEmit",
     "build:worker": "node ../../scripts/run-tool.mjs opennext build",
     "preview": "pnpm run build:worker && pnpm run preview:worker",
-    "preview:worker": "node ../../scripts/run-tool.mjs opennext preview",
+    "preview:worker": "node ../../scripts/run-tool.mjs opennext preview --persist-to ../../.wrangler/state",
     "deploy": "pnpm run build:worker && node ../../scripts/run-tool.mjs opennext deploy",
     "cf-typegen": "node ../../scripts/run-tool.mjs wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
