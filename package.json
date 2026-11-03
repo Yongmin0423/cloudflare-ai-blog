@@ -30,7 +30,8 @@
     "db:migrate:local": "node scripts/run-tool.mjs wrangler d1 migrations apply cloudflare-ai-blog --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state",
     "db:test:local": "node scripts/run-tool.mjs wrangler d1 execute cloudflare-ai-blog --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state --file packages/database/tests/local-smoke.sql",
     "db:bootstrap:local": "node scripts/run-tool.mjs wrangler d1 execute cloudflare-ai-blog --config apps/admin-web/wrangler.jsonc --local --persist-to .wrangler/state --file packages/database/local-bootstrap.sql",
-    "db:test:management": "node --import ./packages/database/tests/register-types.mjs --test packages/database/tests/management.test.mjs"
+    "db:test:management": "node --import ./packages/database/tests/register-types.mjs --test packages/database/tests/management.test.mjs",
+    "db:test:posts": "node --import ./packages/database/tests/register-types.mjs --test packages/database/tests/posts.test.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -13,3 +13,7 @@ Cloudflare D1 cloudflare-ai-blog를 두 앱의 DB 바인딩으로 연결했습�
 - tests/management.test.mjs: 계약·쿼리·동시 수정·블로그 범위·접근 차단 검증
 
 관리자 카테고리·설정은 로컬 D1에 연결했습니다. 게시글 쿼리와 원격 적용은 후속 작업입니다. 인증 전 관리 API는 development localhost만 허용하며 production은 차단합니다.
+
+- src/posts.ts: 게시글 목록/조회/초안 생성·수정/SEO 저장과 revision 검사
+- migrations/0002_post_cover_url.sql: 외부 대표 이미지 URL/alt 필드, 로컬 적용
+- tests/posts.test.mjs: JSON/SEO 저장·충돌/롤백·소유권·목록 검색/페이지 검증 (`pnpm db:test:posts`)

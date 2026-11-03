@@ -155,3 +155,13 @@ pnpm db:test:local
 운영에 적용된 마이그레이션은 수정하지 않고 다음 번호의 SQL로 변경한다. OAuth 토큰이나 R2 비밀값은 스키마·시드에 넣지 않는다.
 
 후속 테이블: agent_jobs, agent_job_steps, sources, 검수/발행 버전, publish_schedules. AI·예약 기능의 요구사항을 확정한 뒤 추가한다.
+
+## 게시글 저장 연결 — 2026-11-03
+
+- `0002_post_cover_url.sql`로 posts.cover_url(최대 2048자), cover_alt(최대 500자) 추가. 기존 URL 입력 UI를 보존하는 임시 외부 이미지 경로이며 R2 객체로 취급하지 않습니다. R2 media 선택은 후속 단계입니다. 기존 행은 빈 문자열로 유지합니다.
+- 생성은 서버가 UUID를 부여하고 draft/manual로 저장합니다. 요청에서 status·origin·blogId는 받지 않습니다.
+- 수정은 revision 일치 및 draft/private 조건을 SQL에서 검사합니다. 게시글과 post_seo를 하나의 D1 batch로 저장하며 충돌/외래 키 실패 시 SEO 변경도 남지 않습니다. 발행 글 수정은 아직 비활성입니다.
+- 본문은 허용된 Tiptap 노드 구조, H2/H3, http/https 링크·이미지, 이미지 대체 텍스트를 검사합니다. 최대 깊이 30, 노드 10000개, UTF-8 JSON 200KB. 요청 본문은 220KB로 제한합니다.
+- SEO 입력이 비면 NULL/auto, 입력하면 manual로 저장합니다. 실제 메타데이터 생성/공개 반영은 발행 단계입니다. excerpt는 본문 텍스트에서 최대 500자를 추출합니다.
+- title/content JSON이 바뀐 경우에만 content_updated_at을 갱신합니다. SEO만 변경하면 기존 날짜를 유지합니다. updated_at과 revision은 정상 수정마다 증가합니다.
+- 목록은 서버에서 제목 검색·상태·카테고리·미분류 필터, 최근 수정순과 ID 정렬, 페이지당 5개를 처리합니다.

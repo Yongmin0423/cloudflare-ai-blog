@@ -64,11 +64,22 @@ pnpm db:test:management
 
 ## 다음 작업
 
-1. 게시글·SEO의 공통 계약과 서버 쿼리 구현
-2. 게시글 목록·에디터를 D1에 연결
-3. 관리자 인증과 초안/변경 API 보호
+1. 관리자 인증 방식 확정과 서버 권한 검사
+2. 로그인 후 관리 API·초안 미리보기 보호
+3. R2 업로드와 이미지 선택 연결
 4. 실제 D1에 검증된 마이그레이션 적용
 
 Cloudflare OAuth 토큰은 Wrangler의 사용자 설정 폴더에 보관하며 저장소에는 넣지 않습니다. wrangler.jsonc의 계정 ID와 DB ID는 바인딩 식별자입니다.
 
 참고: https://developers.cloudflare.com/d1/get-started/ · https://developers.cloudflare.com/d1/best-practices/local-development/ · https://opennext.js.org/cloudflare/bindings
+
+## 게시글 초안 API
+
+- GET `/api/admin/posts`: q/status/category/page 검색. category는 all/uncategorized/카테고리 UUID입니다.
+- POST `/api/admin/posts`: Tiptap JSON과 제목·슬러그·categoryId·대표 이미지 URL/alt·SEO를 초안으로 생성합니다.
+- GET `/api/admin/posts/[id]`: 편집 가능한 데이터 조회.
+- PUT `/api/admin/posts/[id]`: `{post, expectedRevision}`로 수정합니다. 서버가 소유 블로그와 revision을 검사합니다.
+- 모든 API는 기존 개발 localhost 제한을 적용합니다. 삭제/발행/비공개 전환은 아직 제공하지 않습니다.
+- `pnpm db:migrate:local`로 0002를 적용하고 `pnpm db:test:posts`로 업무 검증을 실행합니다. 원격 DB 적용은 별도 단계입니다.
+- 이전 localStorage 초안은 수동 불러오기 후 D1 저장할 수 있습니다. 카테고리는 현재 D1의 ID/이름과 일치해야 복원합니다. 이전 저장본은 삭제하거나 자동 이전하지 않습니다. 저장 버튼의 대상은 이제 D1이며 브라우저에 새 초안을 쓰지는 않습니다.
+- 대시보드 집계/공개 블로그/AI 작업은 아직 샘플입니다. 샘플 게시글을 실제 편집 링크로 연결하지 않습니다.

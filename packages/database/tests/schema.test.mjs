@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
-const schema = readFileSync(new URL('../migrations/0001_blog_schema.sql', import.meta.url), 'utf8');
+import { readFileSync,readdirSync } from 'node:fs';
+const schema = readdirSync(new URL('../migrations/',import.meta.url)).filter(f=>f.endsWith('.sql')).sort().map(f=>readFileSync(new URL('../migrations/'+f,import.meta.url),'utf8')).join('\n');
 function database() {
   const db = new DatabaseSync(':memory:'); db.exec('PRAGMA foreign_keys=ON'); db.exec(schema);
   db.exec("INSERT INTO blogs(id,name) VALUES('a','A'),('b','B'); INSERT INTO categories(id,blog_id,name,slug) VALUES('ca','a','일상','daily'),('cb','b','일상','daily');");

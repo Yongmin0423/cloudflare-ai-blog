@@ -2,6 +2,7 @@ import type { D1Database } from "@cloudflare/workers-types";
 import { categoryInputSchema, settingsSchema, type BlogSettings, type CategoryInput, type CategoryRecord, type SettingsResponse } from "@cloudflare-ai-blog/shared";
 // Imported only by server adapters. Runtime types are explicit package dependencies.
 type Database = Pick<D1Database, "prepare" | "batch">;
+export { getPost, createPost, updatePost, listPosts } from "./posts";
 export class ManagementError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }

@@ -23,3 +23,4 @@ export const updateCategorySchema = z.strictObject({ category: categoryInputSche
 export const deleteCategorySchema = z.strictObject({ expectedUpdatedAt: timestamp });
 export function validationMessages(error: z.ZodError): string[] { return error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`); }
 export { ZodError, type ZodType } from "zod";
+export * from "./posts";
