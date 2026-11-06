@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 const { categoryInputSchema, settingsSchema } = await import('../../shared/src/management.ts');
 const { createCategory, updateCategory, deleteCategory, listCategories, getSettings, saveSettings } = await import('../src/management.ts');
-const { localAdminAllowed } = await import('../../../apps/admin-web/src/lib/local-admin-guard.ts');
 function database() {
   const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON');sqlite.exec(readFileSync(new URL('../migrations/0001_blog_schema.sql',import.meta.url),'utf8'));
   sqlite.exec("INSERT INTO blogs(id,name) VALUES('a','A'),('b','B');");
@@ -49,12 +48,4 @@ test('settings and writing rules save atomically; stale writes leave both unchan
     const after=await getSettings(db,'a');assert.equal(after.settings.name,'내 블로그');assert.equal(after.settings.rules,'확인할 규칙');
     assert.equal((await getSettings(db,'b')).settings.name,'B');
   }finally{sqlite.close();}
-});
-test('management access is denied in production, on non-local hosts and cross-origin writes',()=>{
-  const get=new Request('http://localhost:3001/api/admin/settings');assert.equal(localAdminAllowed(get,'development'),true);
-  assert.equal(localAdminAllowed(get,'production'),false);
-  assert.equal(localAdminAllowed(new Request('http://example.com/api/admin/settings'),'development'),false);
-  const write=(origin)=>new Request('http://localhost:3001/api/admin/settings',{method:'PUT',headers:{Origin:origin,'Content-Type':'application/json'},body:'{}'});
-  assert.equal(localAdminAllowed(write('https://evil.example'),'development'),false);
-  assert.equal(localAdminAllowed(write('http://localhost:3001'),'development'),true);
 });

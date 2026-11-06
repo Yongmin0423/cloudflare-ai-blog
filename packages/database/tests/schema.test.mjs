@@ -17,7 +17,7 @@ function addMedia(db, id = 'm', blog = 'a') {
 
 test('migration creates seven business tables and local defaults', () => {
   const db = database(); try {
-    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get().n,7);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'auth_%'").get().n,7);
     addPost(db);
     const row = db.prepare('SELECT * FROM posts').get();
     assert.equal(row.status,'draft'); assert.equal(row.origin,'manual'); assert.equal(row.revision,1);

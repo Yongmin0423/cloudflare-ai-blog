@@ -1,0 +1,9 @@
+{
+  "name": "@cloudflare-ai-blog/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {".": "./src/config.ts"},
+  "dependencies": {"better-auth": "^1.7.17"},
+  "devDependencies": {"@cloudflare/workers-types": "^5.20261103.1"}
+}
