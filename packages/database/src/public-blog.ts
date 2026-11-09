@@ -10,6 +10,7 @@ export type PublicBlog = {
   name: string;
   description: string;
   language: "ko" | "en" | "ja";
+  domain: string | null;
 };
 
 export type PublicCategory = {
@@ -33,7 +34,12 @@ export type PublishedPost = {
   coverAlt: string;
 };
 
-export type PublishedPostDetail = PublishedPost & { content: EditorDocument };
+export type PublishedPostDetail = PublishedPost & {
+  content: EditorDocument;
+  contentUpdatedAt: number;
+  seoTitle: string | null;
+  seoDescription: string | null;
+};
 
 const publishedCondition =
   "p.blog_id=? AND p.status='published' AND p.published_at IS NOT NULL";
@@ -45,7 +51,7 @@ const postJoins = `LEFT JOIN categories c ON c.blog_id=p.blog_id AND c.id=p.cate
 
 export function readPublicBlog(db: Database, blogId: string) {
   return db
-    .prepare("SELECT name,description,language FROM blogs WHERE id=?")
+    .prepare("SELECT name,description,language,domain FROM blogs WHERE id=?")
     .bind(blogId)
     .first<PublicBlog>();
 }
@@ -117,14 +123,29 @@ export async function readPublishedPost(
 ): Promise<PublishedPostDetail | null> {
   const row = await db
     .prepare(
-      `SELECT ${postFields},p.content_json AS contentJson
-    FROM posts p ${postJoins} WHERE ${publishedCondition} AND p.slug=?`,
+      `SELECT ${postFields},p.content_json AS contentJson,p.content_updated_at AS contentUpdatedAt,
+    s.meta_title AS seoTitle,s.description AS seoDescription
+    FROM posts p ${postJoins}
+    LEFT JOIN post_seo s ON s.blog_id=p.blog_id AND s.post_id=p.id
+    WHERE ${publishedCondition} AND p.slug=?`,
     )
     .bind(blogId, slug)
-    .first<PublishedPost & { contentJson: string }>();
+    .first<Omit<PublishedPostDetail, "content"> & { contentJson: string }>();
   if (!row) return null;
   const { contentJson, ...post } = row;
   return { ...post, content: documentSchema.parse(JSON.parse(contentJson)) };
+}
+
+export async function listPublishedSitemapPosts(db: Database, blogId: string) {
+  const { results } = await db
+    .prepare(
+      `SELECT p.slug,p.published_at AS publishedAt,p.content_updated_at AS contentUpdatedAt
+    FROM posts p WHERE ${publishedCondition}
+    ORDER BY p.published_at DESC,p.id DESC LIMIT 50000`,
+    )
+    .bind(blogId)
+    .all<{ slug: string; publishedAt: number; contentUpdatedAt: number }>();
+  return results;
 }
 
 export function readPublishedCover(

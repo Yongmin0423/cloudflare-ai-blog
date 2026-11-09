@@ -85,9 +85,10 @@
 
 - [x] 8-1. 관리자 미리보기와 저장된 글의 발행·비공개 전환
 - [x] 8-2. 공개 블로그 홈·카테고리·글 상세와 발행된 글의 R2 대표 이미지 연결
-- [ ] Metadata·canonical·OG·BlogPosting JSON-LD
-- [ ] 발행 글만 sitemap·RSS에 반영, robots 설정
-- [ ] 실제 의미 있는 수정일 기준 lastmod, 비공개 유출 검증
+- [x] 8-3. 공개 글의 SEO 제목·설명, canonical, Open Graph, BlogPosting JSON-LD
+- [x] 8-4. 발행 글 사이트맵·RSS와 robots 설정
+- [x] 콘텐츠 수정일 기준 lastmod, 비공개 전환 후 사이트맵·RSS 제외 검증
+- [ ] 후속 작업. 블로그 공통 SEO와 기본 공유 이미지 설정 화면
 
 ## 9. 대시보드 데이터 연결
 

@@ -2,15 +2,23 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
-import { categoryPath } from "@/features/blog/content";
-import { getCategories, getPublicBlog } from "@/lib/public-blog";
+import { categoryPath, RSS_PATH } from "@/features/blog/content";
+import {
+  getCategories,
+  getPublicBlog,
+  getPublicSiteOrigin,
+} from "@/lib/public-blog";
 
 export async function generateMetadata(): Promise<Metadata> {
   const blog = await getPublicBlog();
   if (!blog) notFound();
+  const origin = await getPublicSiteOrigin(blog.domain);
   return {
     title: { default: blog.name, template: `%s | ${blog.name}` },
     description: blog.description || undefined,
+    alternates: origin
+      ? { types: { "application/rss+xml": new URL(RSS_PATH, origin).href } }
+      : undefined,
   };
 }
 

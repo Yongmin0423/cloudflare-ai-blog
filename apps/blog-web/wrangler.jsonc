@@ -23,6 +23,7 @@
   },
   "account_id": "dc37191a546fa5040fee47c2cc936211",
   "vars": {
+    "PUBLIC_SITE_URL": "",
     "PUBLIC_BLOG_ID": "10000000-0000-4000-8000-000000000001",
   },
   "r2_buckets": [
