@@ -2,10 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import {
+  countPublishedPosts,
+  listPublishedPosts,
+  listPublicCategories,
+  readPublishedCover,
+  readPublishedPost,
+} from "../src/public-blog.ts";
 const { postInputSchema, postListQuerySchema } =
   await import("../../shared/src/management.ts");
-const { createPost, getPost, updatePost, listPosts, createCategory } =
-  await import("../src/management.ts");
+const {
+  createPost,
+  getPost,
+  updatePost,
+  setPostPublication,
+  listPosts,
+  createCategory,
+} = await import("../src/management.ts");
 function database() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys=ON");
@@ -331,6 +344,213 @@ test("managed covers stay scoped to the blog and change only with the matching d
     sqlite.close();
   }
 });
+test("publishing is revision-safe and preserves the first date and URL through private edits", async () => {
+  const { db, sqlite } = database();
+  try {
+    const draft = await createPost(db, "a", input);
+    const publish = { status: "published", expectedRevision: draft.revision };
+    assert.equal(draft.publishedAt, null);
+    await assert.rejects(
+      () => setPostPublication(db, "b", draft.id, publish),
+      (error) => error.status === 404,
+    );
+    await assert.rejects(
+      () =>
+        setPostPublication(db, "a", draft.id, {
+          ...publish,
+          status: "private",
+        }),
+      (error) => error.status === 409,
+    );
+
+    const attempts = await Promise.allSettled([
+      setPostPublication(db, "a", draft.id, publish),
+      setPostPublication(db, "a", draft.id, publish),
+    ]);
+    const succeeded = attempts.filter(
+      (result) => result.status === "fulfilled",
+    );
+    assert.equal(succeeded.length, 1);
+    assert.equal(
+      attempts.find((result) => result.status === "rejected").reason.status,
+      409,
+    );
+    const first = succeeded[0].value;
+    assert.equal(first.revision, 2);
+    assert.ok(first.publishedAt);
+
+    await assert.rejects(
+      () =>
+        setPostPublication(db, "a", draft.id, {
+          status: "private",
+          expectedRevision: 1,
+        }),
+      (error) => error.status === 409,
+    );
+    const hidden = await setPostPublication(db, "a", draft.id, {
+      status: "private",
+      expectedRevision: 2,
+    });
+    assert.deepEqual(hidden, {
+      status: "private",
+      revision: 3,
+      publishedAt: first.publishedAt,
+    });
+    await assert.rejects(
+      () =>
+        updatePost(
+          db,
+          "a",
+          draft.id,
+          { ...input, slug: "other-slug", seoTitle: "바뀌면 안 되는 SEO" },
+          3,
+        ),
+      (error) => error.status === 409,
+    );
+    assert.equal((await getPost(db, "a", draft.id)).seoTitle, input.seoTitle);
+    const edited = await updatePost(
+      db,
+      "a",
+      draft.id,
+      { ...input, title: "수정한 글" },
+      3,
+    );
+    assert.equal(edited.slug, input.slug);
+    const republished = await setPostPublication(db, "a", draft.id, {
+      status: "published",
+      expectedRevision: edited.revision,
+    });
+    assert.equal(republished.publishedAt, first.publishedAt);
+    assert.equal(
+      (
+        await listPosts(
+          db,
+          "a",
+          postListQuerySchema.parse({ status: "published" }),
+        )
+      ).total,
+      1,
+    );
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("an empty draft or an AI draft without QA cannot be published", async () => {
+  const { db, sqlite } = database();
+  try {
+    const empty = await createPost(db, "a", {
+      ...input,
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+    });
+    const ai = await createPost(db, "a", { ...input, slug: "ai-draft" });
+    sqlite.prepare("UPDATE posts SET origin='ai' WHERE id=?").run(ai.id);
+    const publish = { status: "published", expectedRevision: 1 };
+    await assert.rejects(
+      () => setPostPublication(db, "a", empty.id, publish),
+      (error) => error.status === 400,
+    );
+    await assert.rejects(
+      () => setPostPublication(db, "a", ai.id, publish),
+      (error) => error.status === 409,
+    );
+    assert.equal((await getPost(db, "a", empty.id)).revision, 1);
+    assert.equal((await getPost(db, "a", ai.id)).status, "draft");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("public queries expose only this blog's published posts and covers attached to those posts", async () => {
+  const { db, sqlite } = database();
+  try {
+    const category = (
+      await createCategory(db, "a", {
+        name: "여행",
+        slug: "travel",
+        description: "",
+        order: 1,
+      })
+    )[0];
+    const otherCategory = (
+      await createCategory(db, "b", {
+        name: "다른 블로그",
+        slug: "other",
+        description: "",
+        order: 1,
+      })
+    )[0];
+    const mediaId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        "INSERT INTO media(id,blog_id,r2_key,original_name,mime_type,size_bytes) VALUES(?,'a','cover/a','image.png','image/png',42)",
+      )
+      .run(mediaId);
+
+    const covered = {
+      ...input,
+      coverMediaId: mediaId,
+      coverUrl: "",
+      categoryId: category.id,
+    };
+    const publicPost = await createPost(db, "a", {
+      ...covered,
+      slug: "공개-글",
+    });
+    const draft = await createPost(db, "a", { ...covered, slug: "draft" });
+    const hidden = await createPost(db, "a", { ...covered, slug: "hidden" });
+    const otherPost = await createPost(db, "b", {
+      ...input,
+      categoryId: otherCategory.id,
+      slug: "other",
+    });
+    for (const [blogId, post] of [
+      ["a", publicPost],
+      ["a", hidden],
+      ["b", otherPost],
+    ]) {
+      await setPostPublication(db, blogId, post.id, {
+        status: "published",
+        expectedRevision: 1,
+      });
+    }
+    await setPostPublication(db, "a", hidden.id, {
+      status: "private",
+      expectedRevision: 2,
+    });
+
+    assert.deepEqual(
+      (await listPublicCategories(db, "a")).map((item) => item.id),
+      [category.id],
+    );
+    assert.equal(await countPublishedPosts(db, "a", category.id), 1);
+    assert.equal(await countPublishedPosts(db, "a", otherCategory.id), 0);
+    const visible = await listPublishedPosts(db, "a", { limit: 4 });
+    assert.deepEqual(
+      visible.map((item) => item.id),
+      [publicPost.id],
+    );
+    assert.equal(visible[0].categorySlug, category.slug);
+    assert.equal(
+      (await readPublishedPost(db, "a", publicPost.slug)).content.type,
+      "doc",
+    );
+    for (const post of [draft, hidden, otherPost]) {
+      assert.equal(await readPublishedPost(db, "a", post.slug), null);
+      assert.equal(await readPublishedCover(db, "a", post.id, mediaId), null);
+    }
+    assert.equal(
+      await readPublishedCover(db, "b", publicPost.id, mediaId),
+      null,
+    );
+    const cover = await readPublishedCover(db, "a", publicPost.id, mediaId);
+    assert.equal(cover?.key, "cover/a");
+    assert.equal(cover?.mimeType, "image/png");
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("server list search, literal wildcard, category, status and pagination stay inside blog", async () => {
   const { db, sqlite } = database();
   try {

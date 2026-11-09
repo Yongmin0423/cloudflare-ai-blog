@@ -26,6 +26,7 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
   AlertDialogAction,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { createEditorExtensions } from "./editor-extensions";
 import {
@@ -46,10 +47,13 @@ import {
   MAX_COVER_IMAGE_BYTES,
   postResponseSchema,
   postInputSchema,
+  postPublicationResponseSchema,
   validationMessages,
   type PostDetail,
+  type PostPublication,
 } from "@cloudflare-ai-blog/shared";
 import { useApiResource } from "../management/use-api-resource";
+import { statusLabels } from "./demo-posts";
 
 function coverImageSource(fields: DraftFields) {
   if (fields.coverMediaId)
@@ -87,7 +91,7 @@ function Preview({
   });
   return (
     <article className="draft-preview">
-      <p className="eyebrow">{fields.category} · 발행 전 미리보기</p>
+      <p className="eyebrow">{fields.category} · 관리자 미리보기</p>
       <h1>{fields.title || "제목 없는 초안"}</h1>
       <CoverImage fields={fields} />
       <EditorContent editor={viewer} />
@@ -113,13 +117,6 @@ function ExistingPostEditor({ postId }: { postId: string }) {
       </div>
     );
   if (!resource.data) return null;
-  if (resource.data.post.status === "published")
-    return (
-      <p>
-        발행 글 수정은 발행 흐름을 연결한 뒤 사용할 수 있어요.{" "}
-        <Link href="/posts">목록으로</Link>
-      </p>
-    );
   return <EditorForm key={postId} post={resource.data.post} />;
 }
 function EditorForm({ post }: { post?: PostDetail }) {
@@ -129,6 +126,8 @@ function EditorForm({ post }: { post?: PostDetail }) {
     categoriesResponseSchema,
   );
   const [revision, setRevision] = useState(post?.revision ?? 0);
+  const [postStatus, setPostStatus] = useState(post?.status ?? "draft");
+  const [publishedAt, setPublishedAt] = useState(post?.publishedAt ?? null);
   const [fields, setFields] = useState<DraftFields>({
     ...emptyFields,
     title: post?.title ?? "",
@@ -145,6 +144,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const [message, setMessage] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [changingPublication, setChangingPublication] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [coverError, setCoverError] = useState("");
   const [availableDraft, setAvailableDraft] = useState<LocalDraft | null>(null);
@@ -159,16 +159,32 @@ function EditorForm({ post }: { post?: PostDetail }) {
     { kind: "restore" } | { kind: "leave"; href: string } | null
   >(null);
   const previewButton = useRef<HTMLButtonElement>(null);
+  const actionStatus = useRef<HTMLParagraphElement>(null);
   const restoreButton = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   const allowLeave = useRef(false);
   const savingRef = useRef(false);
   const uploadingCoverRef = useRef(false);
   const storageKey = draftKey(post?.id ?? "new");
-  const slugLocked = post?.status === "published";
+  const isPublished = postStatus === "published";
+  const slugLocked = publishedAt !== null;
+  const publicationTarget = isPublished ? "private" : "published";
+  const publicationLabel = isPublished
+    ? "비공개 전환"
+    : postStatus === "private"
+      ? "다시 발행"
+      : "발행";
+  const publicationDisabled =
+    !post ||
+    dirty ||
+    saving ||
+    changingPublication ||
+    uploadingCover ||
+    (!isPublished && post.origin === "ai");
   const editor = useEditor({
     extensions: createEditorExtensions(),
     immediatelyRender: false,
+    editable: !isPublished,
     content: post?.content ?? emptyContent,
     editorProps: {
       attributes: {
@@ -258,7 +274,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
     setMessage("");
   }
   async function uploadCover(file: File) {
-    if (uploadingCoverRef.current || savingRef.current) return;
+    if (isPublished || uploadingCoverRef.current || savingRef.current) return;
     setCoverError("");
     if (file.size === 0 || file.size > MAX_COVER_IMAGE_BYTES) {
       setCoverError("비어 있지 않은 5MB 이하의 이미지 파일을 선택해 주세요.");
@@ -314,6 +330,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   async function saveDraft() {
     if (
       !editor ||
+      isPublished ||
       savingRef.current ||
       uploadingCoverRef.current ||
       !categories.ready ||
@@ -375,7 +392,11 @@ function EditorForm({ post }: { post?: PostDetail }) {
         slug: saved.slug,
       }));
       setDirty(false);
-      setMessage("로컬 D1에 초안을 저장했어요.");
+      setMessage(
+        postStatus === "private"
+          ? "비공개 글을 저장했어요."
+          : "로컬 D1에 초안을 저장했어요.",
+      );
       if (!post) {
         allowLeave.current = true;
         router.replace("/posts/" + saved.id + "/edit");
@@ -392,8 +413,75 @@ function EditorForm({ post }: { post?: PostDetail }) {
       editor.setEditable(true, false);
     }
   }
+  async function changePublication(status: PostPublication["status"]) {
+    if (
+      !post ||
+      publicationDisabled ||
+      savingRef.current ||
+      uploadingCoverRef.current
+    )
+      return;
+
+    savingRef.current = true;
+    setChangingPublication(true);
+    setErrors([]);
+    setMessage("");
+    editor?.setEditable(false, false);
+    let editableAfterRequest = !isPublished;
+    try {
+      const response = await fetch(
+        "/api/admin/posts/" + encodeURIComponent(post.id),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status,
+            expectedRevision: revision,
+          } satisfies PostPublication),
+        },
+      );
+      const value = await response.json();
+      if (!response.ok) {
+        const errorMessage =
+          value && typeof value === "object" && "error" in value
+            ? value.error
+            : null;
+        throw new Error(
+          typeof errorMessage === "string"
+            ? errorMessage
+            : "발행 상태를 바꾸지 못했어요.",
+        );
+      }
+      const publication = postPublicationResponseSchema.parse(value);
+      setRevision(publication.revision);
+      setPostStatus(publication.status);
+      setPublishedAt(publication.publishedAt);
+      setInsertMode(null);
+      editableAfterRequest = publication.status !== "published";
+      setMessage(
+        editableAfterRequest
+          ? "비공개 상태로 전환했어요."
+          : "공개 블로그에 발행했어요.",
+      );
+    } catch (error) {
+      setErrors([
+        error instanceof Error ? error.message : "발행 상태를 바꾸지 못했어요.",
+      ]);
+    } finally {
+      savingRef.current = false;
+      setChangingPublication(false);
+      editor?.setEditable(editableAfterRequest, false);
+    }
+  }
   function restore() {
-    if (!editor || !availableDraft || uploadingCoverRef.current) return;
+    if (
+      !editor ||
+      !availableDraft ||
+      isPublished ||
+      savingRef.current ||
+      uploadingCoverRef.current
+    )
+      return;
     try {
       let category = availableDraft.fields.category;
       if (category !== "미분류") {
@@ -414,7 +502,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
       setFields({
         ...availableDraft.fields,
         category,
-        ...(slugLocked ? { slug: post!.slug } : {}),
+        ...(slugLocked ? { slug: fields.slug } : {}),
       });
       setDirty(true);
       setErrors([]);
@@ -492,11 +580,15 @@ function EditorForm({ post }: { post?: PostDetail }) {
       <div className="posts-heading">
         <div className="page-heading">
           <p className="eyebrow">WRITE YOUR STORY</p>
-          <h1>{post ? "게시글 수정" : "새 글 작성"}</h1>
+          <h1>
+            {isPublished ? "발행 글 관리" : post ? "게시글 수정" : "새 글 작성"}
+          </h1>
           <p>
-            {post
-              ? "저장한 초안을 수정하고 로컬 D1에 반영하세요."
-              : "생각을 글로 옮기고, 발행 전 모습을 확인하세요."}
+            {isPublished
+              ? "저장한 글을 확인하고 비공개로 전환할 수 있어요."
+              : post
+                ? "저장한 글을 수정하고 로컬 D1에 반영하세요."
+                : "생각을 글로 옮기고, 발행 전 모습을 확인하세요."}
           </p>
         </div>
         <Link className="outline-button" href="/posts">
@@ -505,8 +597,8 @@ function EditorForm({ post }: { post?: PostDetail }) {
       </div>
       <div className="demo-notice">
         <p>
-          <strong>로컬 D1 초안 저장</strong> · 본문·카테고리·대표
-          이미지·검색엔진 설정을 저장해요.
+          <strong>현재 상태 {statusLabels[postStatus]}</strong> · 발행한 글은
+          공개 블로그에 표시돼요.
         </p>
       </div>
       {categories.error && (
@@ -515,7 +607,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
           <Button onClick={categories.reload}>카테고리 다시 불러오기</Button>
         </div>
       )}
-      {availableDraft && (
+      {availableDraft && !isPublished && (
         <div className="restore-banner">
           <span>
             이 글의 브라우저 저장본이 있어요.{" "}
@@ -533,6 +625,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
               !categories.ready ||
               !!categories.error ||
               saving ||
+              changingPublication ||
               uploadingCover
             }
             className="outline-button"
@@ -559,7 +652,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
         </div>
       )}
       <fieldset
-        disabled={saving}
+        disabled={saving || changingPublication || isPublished}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
       >
         <div className="editor-grid">
@@ -720,7 +813,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
               </label>
               {slugLocked ? (
                 <p className="field-help">
-                  발행된 글은 URL 유지를 위해 슬러그를 잠갔어요.
+                  처음 발행한 뒤에는 URL 유지를 위해 슬러그를 잠가요.
                 </p>
               ) : (
                 <button
@@ -839,47 +932,93 @@ function EditorForm({ post }: { post?: PostDetail }) {
         </div>
       </fieldset>
       <div className="editor-actionbar">
-        <p role="status">
-          {message ||
-            (dirty
-              ? "저장하지 않은 변경 사항이 있어요."
-              : "작성 후 로컬 D1에 초안을 저장할 수 있어요.")}
+        <p ref={actionStatus} role="status" tabIndex={-1}>
+          {changingPublication
+            ? "발행 상태를 변경하고 있어요."
+            : message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "")}
         </p>
         <div>
           <button
             ref={previewButton}
             type="button"
             className="outline-button"
-            disabled={!editor || uploadingCover}
+            disabled={!editor || uploadingCover || changingPublication}
             onClick={showPreview}
           >
             미리보기
           </button>
-          <button
-            type="button"
-            className="primary-link"
-            disabled={
-              !editor ||
-              saving ||
-              uploadingCover ||
-              !categories.ready ||
-              !!categories.error
-            }
-            onClick={saveDraft}
-          >
-            {saving ? "저장 중…" : "D1에 초안 저장"}
-          </button>
-          <button
-            type="button"
-            className="outline-button"
-            disabled
-            aria-describedby="publish-note"
-          >
-            발행
-          </button>
+          {!isPublished && (
+            <button
+              type="button"
+              className="primary-link"
+              disabled={
+                !editor ||
+                saving ||
+                changingPublication ||
+                uploadingCover ||
+                !categories.ready ||
+                !!categories.error
+              }
+              onClick={saveDraft}
+            >
+              {saving
+                ? "저장 중…"
+                : postStatus === "private"
+                  ? "비공개 글 저장"
+                  : "D1에 초안 저장"}
+            </button>
+          )}
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <button
+                type="button"
+                className="outline-button"
+                disabled={publicationDisabled}
+                aria-describedby="publish-note"
+              >
+                {publicationLabel}
+              </button>
+            </AlertDialogTrigger>
+            <AlertDialogContent
+              className="management-dialog"
+              onCloseAutoFocus={(event) => {
+                if (savingRef.current) {
+                  event.preventDefault();
+                  actionStatus.current?.focus();
+                }
+              }}
+            >
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {isPublished
+                    ? "비공개로 전환할까요?"
+                    : "저장한 글을 발행할까요?"}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {isPublished
+                    ? "공개 블로그에서 글을 내리고 다시 편집할 수 있어요."
+                    : "현재 저장된 버전을 공개 블로그에 올려요. 처음 발행하면 글 주소가 잠겨요."}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>취소</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => void changePublication(publicationTarget)}
+                >
+                  {publicationLabel}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
         <small id="publish-note">
-          실제 발행은 발행·검수 단계에서 연결돼요.
+          {!post || dirty
+            ? "먼저 글을 저장해 주세요."
+            : isPublished
+              ? "글을 수정하려면 비공개로 전환해 주세요."
+              : post.origin === "ai"
+                ? "AI 글은 검수 흐름을 거친 뒤 발행할 수 있어요."
+                : "현재 저장된 버전을 발행할 수 있어요."}
         </small>
       </div>
       <Dialog

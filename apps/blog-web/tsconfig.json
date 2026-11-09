@@ -19,7 +19,11 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@cloudflare-ai-blog/database/public-blog": [
+        "../../packages/database/src/public-blog.ts"
+      ],
+      "@cloudflare-ai-blog/shared": ["../../packages/shared/src/management.ts"]
     }
   },
   "include": [

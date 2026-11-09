@@ -165,6 +165,7 @@ export const postDetailSchema = postInputSchema.safeExtend({
   status: z.enum(["draft", "published", "private"]),
   origin: z.enum(["manual", "ai"]),
   revision: z.number().int().positive(),
+  publishedAt: z.number().int().positive().nullable(),
   updatedAt: z.number().int().positive(),
 });
 export type PostDetail = z.infer<typeof postDetailSchema>;
@@ -172,6 +173,16 @@ export const postResponseSchema = z.object({ post: postDetailSchema });
 export const updatePostSchema = z.strictObject({
   post: postInputSchema,
   expectedRevision: z.number().int().positive(),
+});
+export const postPublicationSchema = z.strictObject({
+  status: z.enum(["published", "private"]),
+  expectedRevision: z.number().int().positive(),
+});
+export type PostPublication = z.infer<typeof postPublicationSchema>;
+export const postPublicationResponseSchema = z.object({
+  status: postPublicationSchema.shape.status,
+  revision: postDetailSchema.shape.revision,
+  publishedAt: z.number().int().positive(),
 });
 export const postListQuerySchema = z.strictObject({
   q: z.string().trim().max(200).default(""),
