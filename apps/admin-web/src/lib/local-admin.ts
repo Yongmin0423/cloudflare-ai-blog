@@ -2,10 +2,17 @@ import "server-only";
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import { validationMessages } from "@cloudflare-ai-blog/shared";
 import { ZodError, type ZodType } from "@cloudflare-ai-blog/shared";
-import { localAdminAllowed } from "./local-admin-guard";
-export const LOCAL_BLOG_ID = "10000000-0000-4000-8000-000000000001";
-export function guard(request: Request) {
-  if (!localAdminAllowed(request,process.env.NODE_ENV)) throw new ManagementError(403,"인증 연결 전에는 localhost 개발 환경에서만 관리 기능을 사용할 수 있어요.");
+import { getAdministrator } from "./auth";
+import { sameOriginWrite } from "@cloudflare-ai-blog/auth";
+export async function guard(request: Request) {
+  // 화면 검사와 별개로 모든 관리 API의 시작 지점에서 호출한다.
+  // DB 오류(503)를 로그인 안 됨(401)과 구분하고, 클라이언트가 보낸 blogId를 신뢰하지 않는다.
+  let administrator;
+  try {administrator=await getAdministrator(request.headers);}
+  catch {throw new ManagementError(503,"관리자 인증 설정과 DB 연결을 확인해 주세요.");}
+  if(!administrator)throw new ManagementError(401,"관리자 로그인이 필요해요.");
+  if(new URL(request.url).origin!==administrator.settings.origin||(request.method!=="GET"&&!sameOriginWrite(request,administrator.settings.origin)))throw new ManagementError(403,"허용하지 않은 관리 요청이에요.");
+  return {db:administrator.db,blogId:administrator.blogId};
 }
 export function json(value: unknown, status=200) { return Response.json(value,{status,headers:{"Cache-Control":"no-store"}}); }
 export async function body<T>(request: Request, schema: ZodType<T>, maxBytes=32_000): Promise<T> {

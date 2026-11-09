@@ -31,6 +31,12 @@
       ],
       "@cloudflare-ai-blog/database": [
         "../../packages/database/src/management.ts"
+      ],
+      "@cloudflare-ai-blog/auth": [
+        "../../packages/auth/src/config.ts"
+      ],
+      "@cloudflare-ai-blog/auth/*": [
+        "../../packages/auth/src/*"
       ]
     }
   },

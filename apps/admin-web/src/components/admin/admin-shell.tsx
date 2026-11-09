@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 
+import { LogoutButton } from "./logout-button";
+
 const navigation = [
   { href: "/", label: "대시보드", mark: "◫" },
   { href: "/posts", label: "게시글", mark: "≡" },
@@ -12,7 +14,7 @@ const navigation = [
   { href: "/settings", label: "블로그 설정", mark: "⚙" },
 ];
 
-export function AdminShell({ children, blogUrl }: { children: ReactNode; blogUrl?: string }) {
+export function AdminShell({ children, blogUrl,administratorName }: { children: ReactNode; blogUrl?: string;administratorName:string }) {
   const pathname = usePathname();
   const [openPath, setOpenPath] = useState<string | null>(null);
   const menuOpen = openPath === pathname;
@@ -57,7 +59,7 @@ export function AdminShell({ children, blogUrl }: { children: ReactNode; blogUrl
       <div className="workspace">
         <header className="topbar">
           <p><span className="breadcrumb">관리자 / </span>{current?.label ?? "관리자"}</p>
-          <div className="topbar-actions"><Link href="/login" className="auth-preview-link">인증 연결 전 · 로그인 화면</Link>{blogUrl ? (
+          <div className="topbar-actions"><span className="auth-preview-link">{administratorName}</span><LogoutButton />{blogUrl ? (
             <a className="blog-link" href={blogUrl} target="_blank" rel="noopener noreferrer">
               블로그 보기 <span aria-hidden="true">↗</span><span className="sr-only"> (새 탭)</span>
             </a>
