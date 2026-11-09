@@ -88,7 +88,10 @@
 - [x] 8-3. 공개 글의 SEO 제목·설명, canonical, Open Graph, BlogPosting JSON-LD
 - [x] 8-4. 발행 글 사이트맵·RSS와 robots 설정
 - [x] 콘텐츠 수정일 기준 lastmod, 비공개 전환 후 사이트맵·RSS 제외 검증
-- [ ] 후속 작업. 블로그 공통 SEO와 기본 공유 이미지 설정 화면
+- [x] 관리자 블로그 설정에서 홈 SEO 제목·설명, 기본 공유 이미지와 대체 텍스트 저장
+- [x] 공개 홈 메타데이터와 게시글의 공유 이미지 기본값 적용, Open Graph·X 카드 출력
+
+공통 SEO는 D1의 `0004_blog_seo.sql`을 사용합니다. 기존 로컬 DB에는 `pnpm db:migrate:local`로 적용하고, 배포 시에는 두 Worker를 업데이트하기 전에 대상 D1에 먼저 적용합니다.
 
 ## 9. 대시보드 데이터 연결
 

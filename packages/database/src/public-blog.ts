@@ -11,6 +11,10 @@ export type PublicBlog = {
   description: string;
   language: "ko" | "en" | "ja";
   domain: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  shareMediaId: string | null;
+  shareImageAlt: string | null;
 };
 
 export type PublicCategory = {
@@ -51,7 +55,11 @@ const postJoins = `LEFT JOIN categories c ON c.blog_id=p.blog_id AND c.id=p.cate
 
 export function readPublicBlog(db: Database, blogId: string) {
   return db
-    .prepare("SELECT name,description,language,domain FROM blogs WHERE id=?")
+    .prepare(
+      `SELECT b.name,b.description,b.language,b.domain,seo.meta_title AS seoTitle,
+      seo.description AS seoDescription,seo.share_media_id AS shareMediaId,seo.share_image_alt AS shareImageAlt
+      FROM blogs b LEFT JOIN blog_seo seo ON seo.blog_id=b.id WHERE b.id=?`,
+    )
     .bind(blogId)
     .first<PublicBlog>();
 }
@@ -162,5 +170,20 @@ export function readPublishedCover(
     WHERE ${publishedCondition} AND p.id=? AND m.id=?`,
     )
     .bind(blogId, postId, mediaId)
+    .first<{ key: string; mimeType: string }>();
+}
+
+export function readSiteShareImage(
+  db: Database,
+  blogId: string,
+  mediaId: string,
+) {
+  return db
+    .prepare(
+      `SELECT m.r2_key AS key,m.mime_type AS mimeType FROM blog_seo seo
+      JOIN media m ON m.blog_id=seo.blog_id AND m.id=seo.share_media_id
+      WHERE seo.blog_id=? AND m.id=?`,
+    )
+    .bind(blogId, mediaId)
     .first<{ key: string; mimeType: string }>();
 }
