@@ -39,6 +39,61 @@ export function resolveSiteOrigin(
   return isLocal ? "http://localhost:3000" : undefined;
 }
 
+function defaultShareImage(blog: PublicBlog, siteOrigin: string | undefined) {
+  if (!siteOrigin || !blog.shareMediaId) return undefined;
+  return {
+    url: new URL(`/media/site/${blog.shareMediaId}`, siteOrigin).href,
+    alt: blog.shareImageAlt ?? undefined,
+  };
+}
+
+function twitterCard(
+  title: string,
+  description: string | undefined,
+  image: { url: string; alt?: string } | undefined,
+): Metadata["twitter"] {
+  return {
+    card: image ? "summary_large_image" : "summary",
+    title,
+    description,
+    images: image ? [image] : undefined,
+  };
+}
+
+export function buildHomeMetadata(
+  blog: PublicBlog,
+  siteOrigin: string | undefined,
+  page: number,
+): Metadata {
+  const homeTitle = blog.seoTitle?.trim() || blog.name;
+  const title = page === 1 ? homeTitle : `${homeTitle} - ${page}페이지`;
+  const description =
+    blog.seoDescription?.trim() || blog.description.trim() || undefined;
+  const url = siteOrigin
+    ? new URL(page === 1 ? "/" : `/?page=${page}`, siteOrigin).href
+    : undefined;
+  const image = defaultShareImage(blog, siteOrigin);
+  return {
+    title: { absolute: title },
+    description,
+    alternates: siteOrigin
+      ? {
+          canonical: url,
+          types: { "application/rss+xml": new URL(RSS_PATH, siteOrigin).href },
+        }
+      : undefined,
+    openGraph: {
+      type: "website",
+      title,
+      description,
+      url,
+      siteName: blog.name,
+      images: image ? [image] : undefined,
+    },
+    twitter: twitterCard(title, description, image),
+  };
+}
+
 export function buildPostSeo(
   post: PublishedPostDetail,
   blog: PublicBlog,
@@ -55,6 +110,9 @@ export function buildPostSeo(
     cover && (!cover.startsWith("/") || siteOrigin)
       ? new URL(cover, siteOrigin).href
       : undefined;
+  const shareImage = image
+    ? { url: image, alt: post.coverAlt }
+    : defaultShareImage(blog, siteOrigin);
   const datePublished = new Date(post.publishedAt).toISOString();
   const dateModified = new Date(postLastModifiedAt(post)).toISOString();
 
@@ -76,8 +134,9 @@ export function buildPostSeo(
       publishedTime: datePublished,
       modifiedTime: dateModified,
       section: post.categoryName ?? undefined,
-      images: image ? [{ url: image, alt: post.coverAlt }] : undefined,
+      images: shareImage ? [shareImage] : undefined,
     },
+    twitter: twitterCard(title, description, shareImage),
   };
   const structuredData = {
     "@context": "https://schema.org",

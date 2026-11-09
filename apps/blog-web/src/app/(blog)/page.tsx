@@ -1,20 +1,34 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { PostCard } from "@/components/blog/post-card";
 import { PostCover, postCoverSource } from "@/components/blog/post-cover";
 import { CategoryNav, Pagination } from "@/components/blog/list-navigation";
 import { formatDate, postPath, readPage } from "@/features/blog/content";
+import { buildHomeMetadata } from "@/features/blog/post-seo";
 import {
   getCategories,
   getPublicBlog,
+  getPublicSiteOrigin,
   getPublishedPage,
 } from "@/lib/public-blog";
 
-export default async function Home({
-  searchParams,
-}: {
+type HomeProps = {
   searchParams: Promise<{ page?: string | string[] }>;
-}) {
+};
+
+export async function generateMetadata({
+  searchParams,
+}: HomeProps): Promise<Metadata> {
+  const page = readPage((await searchParams).page);
+  if (!page) notFound();
+  const blog = await getPublicBlog();
+  if (!blog) notFound();
+  const origin = await getPublicSiteOrigin(blog.domain);
+  return buildHomeMetadata(blog, origin, page);
+}
+
+export default async function Home({ searchParams }: HomeProps) {
   const page = readPage((await searchParams).page);
   if (!page) notFound();
   const [blog, categories, result] = await Promise.all([

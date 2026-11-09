@@ -43,8 +43,6 @@ import {
 } from "./editor-model";
 import {
   categoriesResponseSchema,
-  coverUploadResponseSchema,
-  MAX_COVER_IMAGE_BYTES,
   postResponseSchema,
   postInputSchema,
   postPublicationResponseSchema,
@@ -52,6 +50,7 @@ import {
   type PostDetail,
   type PostPublication,
 } from "@cloudflare-ai-blog/shared";
+import { uploadBlogImage } from "@/lib/upload-blog-image";
 import { useApiResource } from "../management/use-api-resource";
 import { statusLabels } from "./demo-posts";
 
@@ -276,35 +275,10 @@ function EditorForm({ post }: { post?: PostDetail }) {
   async function uploadCover(file: File) {
     if (isPublished || uploadingCoverRef.current || savingRef.current) return;
     setCoverError("");
-    if (file.size === 0 || file.size > MAX_COVER_IMAGE_BYTES) {
-      setCoverError("비어 있지 않은 5MB 이하의 이미지 파일을 선택해 주세요.");
-      return;
-    }
-
     uploadingCoverRef.current = true;
     setUploadingCover(true);
     try {
-      const response = await fetch("/api/admin/media", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "X-Image-Name": encodeURIComponent(file.name),
-        },
-        body: file,
-      });
-      const value = await response.json();
-      if (!response.ok) {
-        const errorMessage =
-          value && typeof value === "object" && "error" in value
-            ? value.error
-            : null;
-        throw new Error(
-          typeof errorMessage === "string"
-            ? errorMessage
-            : "이미지를 업로드하지 못했어요.",
-        );
-      }
-      const { mediaId } = coverUploadResponseSchema.parse(value);
+      const { mediaId } = await uploadBlogImage(file);
       setFields((previous) => ({
         ...previous,
         coverUrl: "",
