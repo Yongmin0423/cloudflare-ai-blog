@@ -1,0 +1,12 @@
+**/node_modules/
+.pnpm-store/
+**/.next/
+**/.open-next/
+**/.wrangler/
+**/.vercel/
+**/build/
+**/out/
+**/coverage/
+**/next-env.d.ts
+**/cloudflare-env.d.ts
+pnpm-lock.yaml

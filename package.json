@@ -13,6 +13,8 @@
     "build": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run build",
     "start": "pnpm --parallel --filter \"./apps/*\" run start",
     "lint": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run lint",
+    "format": "prettier --write",
+    "format:check": "prettier --check",
     "typecheck": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run typecheck",
     "build:worker": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run build:worker",
     "build:blog": "pnpm --filter @cloudflare-ai-blog/blog-web run build:worker",
@@ -44,5 +46,8 @@
       "workerd",
       "unrs-resolver"
     ]
+  },
+  "devDependencies": {
+    "prettier": "3.7.4"
   }
 }
