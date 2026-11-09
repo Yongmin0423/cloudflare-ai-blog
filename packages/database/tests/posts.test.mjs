@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   countPublishedPosts,
   listPublishedPosts,
+  listPublishedSitemapPosts,
   listPublicCategories,
   readPublishedCover,
   readPublishedPost,
@@ -531,10 +532,16 @@ test("public queries expose only this blog's published posts and covers attached
       [publicPost.id],
     );
     assert.equal(visible[0].categorySlug, category.slug);
-    assert.equal(
-      (await readPublishedPost(db, "a", publicPost.slug)).content.type,
-      "doc",
-    );
+    const detail = await readPublishedPost(db, "a", publicPost.slug);
+    assert.equal(detail.content.type, "doc");
+    assert.equal(detail.seoTitle, input.seoTitle);
+    assert.equal(detail.seoDescription, input.seoDescription);
+    assert.equal(detail.contentUpdatedAt, publicPost.updatedAt);
+    const sitemap = await listPublishedSitemapPosts(db, "a");
+    assert.equal(sitemap.length, 1);
+    assert.equal(sitemap[0].slug, publicPost.slug);
+    assert.equal(sitemap[0].publishedAt, detail.publishedAt);
+    assert.equal(sitemap[0].contentUpdatedAt, detail.contentUpdatedAt);
     for (const post of [draft, hidden, otherPost]) {
       assert.equal(await readPublishedPost(db, "a", post.slug), null);
       assert.equal(await readPublishedCover(db, "a", post.id, mediaId), null);
