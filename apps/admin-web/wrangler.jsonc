@@ -3,34 +3,37 @@
   "name": "cloudflare-ai-blog-admin",
   "main": ".open-next/worker.js",
   "compatibility_date": "2026-10-20",
-  "compatibility_flags": [
-    "nodejs_compat",
-    "global_fetch_strictly_public"
-  ],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
     "directory": ".open-next/assets",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
   },
   "services": [
     {
       "binding": "WORKER_SELF_REFERENCE",
-      "service": "cloudflare-ai-blog-admin"
-    }
+      "service": "cloudflare-ai-blog-admin",
+    },
   ],
   "observability": {
-    "enabled": true
+    "enabled": true,
   },
   "dev": {
     "port": 8788,
-    "inspector_port": 9231
+    "inspector_port": 9231,
   },
   "account_id": "dc37191a546fa5040fee47c2cc936211",
+  "r2_buckets": [
+    {
+      "binding": "BLOG_MEDIA",
+      "bucket_name": "cloudflare-ai-blog-media",
+    },
+  ],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "cloudflare-ai-blog",
       "database_id": "457e1d1c-046f-4f9e-a723-1fea0fc9f61b",
-      "migrations_dir": "../../packages/database/migrations"
-    }
-  ]
+      "migrations_dir": "../../packages/database/migrations",
+    },
+  ],
 }
