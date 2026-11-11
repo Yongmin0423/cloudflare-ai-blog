@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -144,6 +144,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [changingPublication, setChangingPublication] = useState(false);
+  const [deletingDraft, setDeletingDraft] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [coverError, setCoverError] = useState("");
   const [availableDraft, setAvailableDraft] = useState<LocalDraft | null>(null);
@@ -167,6 +168,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const storageKey = draftKey(post?.id ?? "new");
   const isPublished = postStatus === "published";
   const slugLocked = publishedAt !== null;
+  const canDeleteDraft = !!post && postStatus === "draft" && !slugLocked;
   const publicationTarget = isPublished ? "private" : "published";
   const publicationLabel = isPublished
     ? "비공개 전환"
@@ -178,6 +180,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
     dirty ||
     saving ||
     changingPublication ||
+    deletingDraft ||
     uploadingCover ||
     (!isPublished && post.origin === "ai");
   const editor = useEditor({
@@ -447,6 +450,58 @@ function EditorForm({ post }: { post?: PostDetail }) {
       editor?.setEditable(editableAfterRequest, false);
     }
   }
+  async function removeDraft() {
+    if (
+      !post ||
+      !canDeleteDraft ||
+      savingRef.current ||
+      uploadingCoverRef.current
+    )
+      return;
+
+    savingRef.current = true;
+    setDeletingDraft(true);
+    setErrors([]);
+    setMessage("");
+    editor?.setEditable(false, false);
+    try {
+      const response = await fetch(
+        "/api/admin/posts/" + encodeURIComponent(post.id),
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expectedRevision: revision }),
+        },
+      );
+      if (!response.ok) {
+        const result: unknown = await response.json().catch(() => null);
+        throw new Error(
+          result &&
+            typeof result === "object" &&
+            "error" in result &&
+            typeof result.error === "string"
+            ? result.error
+            : "초안을 삭제하지 못했어요.",
+        );
+      }
+    } catch (error) {
+      setErrors([
+        error instanceof Error ? error.message : "초안을 삭제하지 못했어요.",
+      ]);
+      savingRef.current = false;
+      setDeletingDraft(false);
+      editor?.setEditable(true, false);
+      return;
+    }
+
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Browser storage access can fail after the server has deleted the draft.
+    }
+    allowLeave.current = true;
+    router.replace("/posts");
+  }
   function restore() {
     if (
       !editor ||
@@ -600,6 +655,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
               !!categories.error ||
               saving ||
               changingPublication ||
+              deletingDraft ||
               uploadingCover
             }
             className="outline-button"
@@ -626,7 +682,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
         </div>
       )}
       <fieldset
-        disabled={saving || changingPublication || isPublished}
+        disabled={saving || changingPublication || deletingDraft || isPublished}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
       >
         <div className="editor-grid">
@@ -907,16 +963,20 @@ function EditorForm({ post }: { post?: PostDetail }) {
       </fieldset>
       <div className="editor-actionbar">
         <p ref={actionStatus} role="status" tabIndex={-1}>
-          {changingPublication
-            ? "발행 상태를 변경하고 있어요."
-            : message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "")}
+          {deletingDraft
+            ? "초안을 삭제하고 있어요."
+            : changingPublication
+              ? "발행 상태를 변경하고 있어요."
+              : message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "")}
         </p>
         <div>
           <button
             ref={previewButton}
             type="button"
             className="outline-button"
-            disabled={!editor || uploadingCover || changingPublication}
+            disabled={
+              !editor || uploadingCover || changingPublication || deletingDraft
+            }
             onClick={showPreview}
           >
             미리보기
@@ -929,6 +989,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 !editor ||
                 saving ||
                 changingPublication ||
+                deletingDraft ||
                 uploadingCover ||
                 !categories.ready ||
                 !!categories.error
@@ -984,6 +1045,50 @@ function EditorForm({ post }: { post?: PostDetail }) {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          {canDeleteDraft && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  className="outline-button"
+                  disabled={
+                    saving ||
+                    changingPublication ||
+                    uploadingCover ||
+                    deletingDraft
+                  }
+                >
+                  초안 삭제
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent
+                className="management-dialog"
+                onCloseAutoFocus={(event) => {
+                  if (savingRef.current) {
+                    event.preventDefault();
+                    actionStatus.current?.focus();
+                  }
+                }}
+              >
+                <AlertDialogHeader>
+                  <AlertDialogTitle>이 초안을 삭제할까요?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    삭제한 초안은 복구할 수 없어요.
+                    {dirty && " 저장하지 않은 수정 내용도 사라져요."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>취소</AlertDialogCancel>
+                  <AlertDialogAction
+                    className={buttonVariants({ variant: "destructive" })}
+                    onClick={() => void removeDraft()}
+                  >
+                    초안 삭제
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
         <small id="publish-note">
           {!post || dirty

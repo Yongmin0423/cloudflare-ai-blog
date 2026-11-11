@@ -174,6 +174,9 @@ export const updatePostSchema = z.strictObject({
   post: postInputSchema,
   expectedRevision: z.number().int().positive(),
 });
+export const deletePostDraftSchema = z.strictObject({
+  expectedRevision: updatePostSchema.shape.expectedRevision,
+});
 export const postPublicationSchema = z.strictObject({
   status: z.enum(["published", "private"]),
   expectedRevision: z.number().int().positive(),

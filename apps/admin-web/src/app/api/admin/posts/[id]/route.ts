@@ -1,9 +1,11 @@
 import {
+  deletePostDraft,
   getPost,
   setPostPublication,
   updatePost,
 } from "@cloudflare-ai-blog/database";
 import {
+  deletePostDraftSchema,
   postPublicationSchema,
   updatePostSchema,
 } from "@cloudflare-ai-blog/shared";
@@ -44,6 +46,25 @@ export async function PATCH(request: Request, context: Context) {
     const { id } = await context.params;
     const input = await body(request, postPublicationSchema, 1024);
     return json(await setPostPublication(db, blogId, id, input));
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
+export async function DELETE(request: Request, context: Context) {
+  try {
+    const { db, blogId } = await guard(request);
+    const { id } = await context.params;
+    const { expectedRevision } = await body(
+      request,
+      deletePostDraftSchema,
+      1024,
+    );
+    await deletePostDraft(db, blogId, id, expectedRevision);
+    return new Response(null, {
+      status: 204,
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     return apiError(error);
   }

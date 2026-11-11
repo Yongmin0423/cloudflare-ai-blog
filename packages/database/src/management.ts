@@ -15,6 +15,7 @@ export {
   getPost,
   createPost,
   updatePost,
+  deletePostDraft,
   setPostPublication,
   listPosts,
   getPostDashboard,

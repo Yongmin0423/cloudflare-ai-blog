@@ -1,0 +1,20 @@
+{
+  "name": "@cloudflare-ai-blog/agent-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/run-tool.mjs wrangler dev --persist-to ../../.wrangler/state",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:worker": "node ../../scripts/run-tool.mjs wrangler deploy --dry-run --outdir .wrangler/build",
+    "cf-typegen": "node ../../scripts/run-tool.mjs wrangler types --include-runtime=false --env-interface AgentServiceEnv cloudflare-env.d.ts"
+  },
+  "dependencies": {
+    "agents": "0.33.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261103.1",
+    "typescript": "^5.9.3"
+  }
+}
