@@ -18,6 +18,7 @@ const {
   updatePost,
   setPostPublication,
   listPosts,
+  getPostDashboard,
   createCategory,
 } = await import("../src/management.ts");
 function database() {
@@ -46,6 +47,7 @@ function database() {
           return { results: stmt.all(...bound) };
         },
         async run() {
+          if (stmt.columns().length) return { results: stmt.all(...bound) };
           return { meta: { changes: Number(stmt.run(...bound).changes) } };
         },
       };
@@ -600,6 +602,58 @@ test("server list search, literal wildcard, category, status and pagination stay
       0,
     );
     assert.equal((await listPosts(db, "a", { ...q, page: 999 })).page, 2);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("dashboard counts every status and returns only the five latest posts for this blog", async () => {
+  const { db, sqlite } = database();
+  try {
+    assert.deepEqual((await getPostDashboard(db, "a")).recentPosts, []);
+    assert.deepEqual(
+      { ...(await getPostDashboard(db, "a")).counts },
+      { total: 0, draft: 0, published: 0, private: 0 },
+    );
+
+    const insert = sqlite.prepare(
+      `INSERT INTO posts(id,blog_id,title,slug,status,created_at,updated_at,content_updated_at,published_at)
+      VALUES(?,?,?,?,?,1000,?,1000,?)`,
+    );
+    const ids = Array.from({ length: 6 }, () => crypto.randomUUID());
+    for (const [index, id] of ids.entries()) {
+      const status =
+        index < 4 ? "draft" : index === 4 ? "published" : "private";
+      insert.run(
+        id,
+        "a",
+        `글 ${index}`,
+        `post-${index}`,
+        status,
+        1000 + index,
+        status === "published" ? 1000 : null,
+      );
+    }
+    insert.run(
+      crypto.randomUUID(),
+      "b",
+      "다른 블로그",
+      "other-post",
+      "published",
+      2000,
+      1000,
+    );
+
+    const { counts, recentPosts } = await getPostDashboard(db, "a");
+    assert.deepEqual(
+      { ...counts },
+      { total: 6, draft: 4, published: 1, private: 1 },
+    );
+    assert.deepEqual(
+      recentPosts.map((post) => post.id),
+      ids.slice(1).reverse(),
+    );
+    assert.equal(recentPosts[0].category, "미분류");
   } finally {
     sqlite.close();
   }

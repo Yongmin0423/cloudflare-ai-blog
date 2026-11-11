@@ -52,7 +52,7 @@ import {
 } from "@cloudflare-ai-blog/shared";
 import { uploadBlogImage } from "@/lib/upload-blog-image";
 import { useApiResource } from "../management/use-api-resource";
-import { statusLabels } from "./demo-posts";
+import { statusLabels } from "./post-status";
 
 function coverImageSource(fields: DraftFields) {
   if (fields.coverMediaId)

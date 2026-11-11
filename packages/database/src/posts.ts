@@ -282,6 +282,33 @@ export async function setPostPublication(
   return postPublicationResponseSchema.parse(result);
 }
 
+const postOverviewFields = `p.id,p.title,p.status,p.updated_at AS updatedAt,
+  coalesce(c.name,'미분류') AS category`;
+const postOverviewFrom = `FROM posts p LEFT JOIN categories c
+  ON c.blog_id=p.blog_id AND c.id=p.category_id`;
+const recentPostOrder = "ORDER BY p.updated_at DESC,p.id DESC";
+
+export async function getPostDashboard(db: Database, blogId: string) {
+  const [counts, recentPosts] = await db.batch([
+    db
+      .prepare(
+        `SELECT count(*) AS total,
+          count(CASE WHEN status='draft' THEN 1 END) AS draft,
+          count(CASE WHEN status='published' THEN 1 END) AS published,
+          count(CASE WHEN status='private' THEN 1 END) AS private
+        FROM posts WHERE blog_id=?`,
+      )
+      .bind(blogId),
+    db
+      .prepare(
+        `SELECT ${postOverviewFields} ${postOverviewFrom}
+        WHERE p.blog_id=? ${recentPostOrder} LIMIT 5`,
+      )
+      .bind(blogId),
+  ]);
+  return { counts: counts.results[0], recentPosts: recentPosts.results };
+}
+
 export async function listPosts(
   db: Database,
   blogId: string,
@@ -313,8 +340,8 @@ export async function listPosts(
   const page = Math.min(query.page, Math.max(1, Math.ceil(total / pageSize)));
   const { results: posts } = await db
     .prepare(
-      `SELECT p.id,p.title,p.slug,p.category_id AS categoryId,coalesce(c.name,'미분류') AS category,p.status,p.origin,p.revision,p.updated_at AS updatedAt
-    FROM posts p LEFT JOIN categories c ON c.blog_id=p.blog_id AND c.id=p.category_id WHERE ${where} ORDER BY p.updated_at DESC,p.id DESC LIMIT ? OFFSET ?`,
+      `SELECT ${postOverviewFields},p.slug,p.category_id AS categoryId,p.origin,p.revision
+      ${postOverviewFrom} WHERE ${where} ${recentPostOrder} LIMIT ? OFFSET ?`,
     )
     .bind(...values, pageSize, (page - 1) * pageSize)
     .all();

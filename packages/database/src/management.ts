@@ -17,6 +17,7 @@ export {
   updatePost,
   setPostPublication,
   listPosts,
+  getPostDashboard,
 } from "./posts";
 export class ManagementError extends Error {
   constructor(

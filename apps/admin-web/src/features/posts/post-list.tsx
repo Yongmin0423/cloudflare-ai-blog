@@ -4,12 +4,17 @@ import { useState } from "react";
 import {
   postListResponseSchema,
   categoriesResponseSchema,
+  type PostListQuery,
 } from "@cloudflare-ai-blog/shared";
 import { useApiResource } from "../management/use-api-resource";
-import { statusLabels } from "./demo-posts";
-export function PostList() {
+import { statusLabels } from "./post-status";
+export function PostList({
+  initialStatus,
+}: {
+  initialStatus: PostListQuery["status"];
+}) {
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState(initialStatus);
   const [category, setCategory] = useState("all");
   const [page, setPage] = useState(1);
   const params = new URLSearchParams({
@@ -74,7 +79,7 @@ export function PostList() {
             <select
               value={status}
               onChange={(e) => {
-                setStatus(e.target.value);
+                setStatus(e.target.value as PostListQuery["status"]);
                 setPage(1);
               }}
             >
