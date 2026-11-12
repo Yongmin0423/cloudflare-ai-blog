@@ -10,6 +10,8 @@
     "dev": "pnpm --parallel --filter \"./apps/*\" run dev",
     "dev:blog": "pnpm --filter @cloudflare-ai-blog/blog-web run dev",
     "dev:admin": "pnpm --filter @cloudflare-ai-blog/admin-web run dev",
+    "dev:agent": "pnpm --filter @cloudflare-ai-blog/agent-service run dev",
+    "build:agent": "pnpm --filter @cloudflare-ai-blog/agent-service run build:worker",
     "build": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run build",
     "start": "pnpm --parallel --filter \"./apps/*\" run start",
     "lint": "pnpm -r --workspace-concurrency=1 --filter \"./apps/*\" run lint",

@@ -16,6 +16,7 @@ const {
   createPost,
   getPost,
   updatePost,
+  deletePostDraft,
   setPostPublication,
   listPosts,
   getPostDashboard,
@@ -602,6 +603,59 @@ test("server list search, literal wildcard, category, status and pagination stay
       0,
     );
     assert.equal((await listPosts(db, "a", { ...q, page: 999 })).page, 2);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("deleting a draft requires its latest revision and preserves published and private posts", async () => {
+  const { db, sqlite } = database();
+  try {
+    const draft = await createPost(db, "a", input, { origin: "ai" });
+    const manual = await createPost(db, "a", { ...input, slug: "manual" });
+    await assert.rejects(deletePostDraft(db, "b", draft.id, draft.revision), {
+      status: 404,
+    });
+    const edited = await updatePost(
+      db,
+      "a",
+      draft.id,
+      { ...input, title: "수정한 초안" },
+      draft.revision,
+    );
+    await assert.rejects(deletePostDraft(db, "a", draft.id, draft.revision), {
+      status: 409,
+    });
+    await deletePostDraft(db, "a", draft.id, edited.revision);
+    await assert.rejects(getPost(db, "a", draft.id), { status: 404 });
+    assert.equal(
+      sqlite.prepare("SELECT 1 FROM post_seo WHERE post_id=?").get(draft.id),
+      undefined,
+    );
+
+    const published = await setPostPublication(db, "a", manual.id, {
+      status: "published",
+      expectedRevision: manual.revision,
+    });
+    await assert.rejects(
+      deletePostDraft(db, "a", manual.id, published.revision),
+      { status: 409 },
+    );
+    const hidden = await setPostPublication(db, "a", manual.id, {
+      status: "private",
+      expectedRevision: published.revision,
+    });
+    await assert.rejects(deletePostDraft(db, "a", manual.id, hidden.revision), {
+      status: 409,
+    });
+    assert.equal((await getPost(db, "a", manual.id)).status, "private");
+
+    const anotherDraft = await createPost(db, "a", {
+      ...input,
+      slug: "another-draft",
+    });
+    await deletePostDraft(db, "a", anotherDraft.id, anotherDraft.revision);
+    await assert.rejects(getPost(db, "a", anotherDraft.id), { status: 404 });
   } finally {
     sqlite.close();
   }

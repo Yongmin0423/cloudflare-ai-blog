@@ -76,17 +76,23 @@ export async function createPost(
   db: Database,
   blogId: string,
   input: PostInput,
+  {
+    id = crypto.randomUUID(),
+    origin = "manual",
+  }: {
+    id?: string;
+    origin?: "manual" | "ai";
+  } = {},
 ) {
   const post = postInputSchema.parse(input);
-  const id = crypto.randomUUID();
   const now = Date.now();
   await checkCoverMedia(db, blogId, post.coverMediaId);
   try {
     await db.batch([
       db
         .prepare(
-          `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,created_at,updated_at,content_updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,origin,created_at,updated_at,content_updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .bind(
           id,
@@ -98,6 +104,7 @@ export async function createPost(
           excerpt(post),
           post.coverUrl,
           post.coverMediaId ? "" : post.coverAlt,
+          origin,
           now,
           now,
           now,
@@ -214,6 +221,37 @@ export async function updatePost(
   }
   return getPost(db, blogId, id);
 }
+export async function deletePostDraft(
+  db: Database,
+  blogId: string,
+  id: string,
+  expectedRevision: number,
+) {
+  const deleted = await db
+    .prepare(
+      `DELETE FROM posts
+      WHERE blog_id=? AND id=? AND revision=? AND status='draft' AND published_at IS NULL
+      RETURNING id`,
+    )
+    .bind(blogId, id, expectedRevision)
+    .first<{ id: string }>();
+  if (deleted) return;
+
+  const current = await db
+    .prepare(
+      "SELECT status,published_at AS publishedAt FROM posts WHERE blog_id=? AND id=?",
+    )
+    .bind(blogId, id)
+    .first<{ status: string; publishedAt: number | null }>();
+  if (!current) throw new ManagementError(404, "게시글을 찾을 수 없어요.");
+  if (current.status !== "draft" || current.publishedAt !== null)
+    throw new ManagementError(409, "발행한 적 없는 초안만 삭제할 수 있어요.");
+  throw new ManagementError(
+    409,
+    "다른 화면에서 초안이 변경됐어요. 최신 저장본을 확인한 뒤 다시 시도해 주세요.",
+  );
+}
+
 function hasPublishableContent(node: EditorNode): boolean {
   return (
     node.type === "image" ||

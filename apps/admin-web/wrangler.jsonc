@@ -13,6 +13,10 @@
       "binding": "WORKER_SELF_REFERENCE",
       "service": "cloudflare-ai-blog-admin",
     },
+    {
+      "binding": "AGENT_SERVICE",
+      "service": "cloudflare-ai-blog-agent",
+    },
   ],
   "observability": {
     "enabled": true,
