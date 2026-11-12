@@ -6,12 +6,16 @@ import {
 } from "@cloudflare-ai-blog/database";
 import {
   agentDraftRequestSchema,
-  type AiDraftRequest,
+  type AgentDraftRequest,
+  type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
-import { generateDraft } from "./generate-draft";
+import { generateDraft, suggestDraftSubject } from "./generate-draft";
 
 type Draft = { id: string; title: string };
-type DraftResult = { draft: Draft } | { error: string; status: number };
+type DraftResult =
+  | { draft: Draft }
+  | { subjectToConfirm: AiDraftSubjectSuggestion }
+  | { error: string; status: number };
 
 async function retryDatabase<T>(operation: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -32,20 +36,21 @@ async function retryDatabase<T>(operation: () => Promise<T>): Promise<T> {
 export class MainAgent extends Agent<AgentServiceEnv> {
   private inFlight = new Map<string, Promise<DraftResult>>();
 
-  async createDraft(request: AiDraftRequest): Promise<DraftResult> {
+  async createDraft(request: AgentDraftRequest): Promise<DraftResult> {
     const id = request.requestId.toLowerCase();
-    const pending = this.inFlight.get(id);
+    const operationKey = request.subject ? id : `${id}:subject`;
+    const pending = this.inFlight.get(operationKey);
     if (pending) return pending;
     const operation = this.writeDraft({ ...request, requestId: id });
-    this.inFlight.set(id, operation);
+    this.inFlight.set(operationKey, operation);
     try {
       return await operation;
     } finally {
-      this.inFlight.delete(id);
+      this.inFlight.delete(operationKey);
     }
   }
 
-  private async writeDraft(request: AiDraftRequest): Promise<DraftResult> {
+  private async writeDraft(request: AgentDraftRequest): Promise<DraftResult> {
     const { DB } = this.env;
     const blogId = this.name;
     const findSavedDraft = () =>
@@ -71,10 +76,16 @@ export class MainAgent extends Agent<AgentServiceEnv> {
           "카테고리가 변경됐어요. 목록을 다시 불러와 주세요.",
         );
 
+      const { subject } = request;
+      if (!subject)
+        return {
+          subjectToConfirm: await suggestDraftSubject(this.env, request),
+        };
+
       const { settings } = await retryDatabase(() => getSettings(DB, blogId));
       const draft = await generateDraft(
         this.env,
-        request,
+        { ...request, subject },
         settings,
         category?.name ?? null,
       );
@@ -126,12 +137,29 @@ export default {
       );
 
     const { blogId, ...draftRequest } = input.data;
+    const local = new URL(request.url).origin === "http://127.0.0.1:8789";
+    if (local && draftRequest.subject && !draftRequest.chatGptTicket)
+      return Response.json(
+        {
+          error:
+            "로컬 초안을 저장하려면 관리자 화면에서 ChatGPT 본문 작성 모델을 선택해 주세요.",
+        },
+        { status: 400 },
+      );
+    if (draftRequest.chatGptTicket && !local)
+      return Response.json(
+        { error: "ChatGPT 본문 생성은 로컬에서 사용할 수 있어요." },
+        { status: 403 },
+      );
     try {
       const agent = await getAgentByName(env.MAIN_AGENT, blogId);
       const result = await agent.createDraft(draftRequest);
-      return "draft" in result
-        ? Response.json(result.draft)
-        : Response.json({ error: result.error }, { status: result.status });
+      if ("error" in result)
+        return Response.json(
+          { error: result.error },
+          { status: result.status },
+        );
+      return Response.json("draft" in result ? result.draft : result);
     } catch (error) {
       console.error("Main Agent unavailable", {
         requestId: draftRequest.requestId,

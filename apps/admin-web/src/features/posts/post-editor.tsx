@@ -28,6 +28,7 @@ import {
   AlertDialogAction,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { AiRevision } from "./ai-revision";
 import { createEditorExtensions } from "./editor-extensions";
 import {
   draftKey,
@@ -53,6 +54,30 @@ import {
 import { uploadBlogImage } from "@/lib/upload-blog-image";
 import { useApiResource } from "../management/use-api-resource";
 import { statusLabels } from "./post-status";
+
+const citationLabel = /^\[\d+\]$/;
+
+function collectEditorSources(document: JSONContent | undefined) {
+  const sources = new Map<string, { label: string; href: string }>();
+
+  function visit(node: JSONContent) {
+    const label = node.text?.trim();
+    const href = node.marks?.find(({ type }) => type === "link")?.attrs?.href;
+    if (
+      label &&
+      citationLabel.test(label) &&
+      typeof href === "string" &&
+      isWebUrl(href)
+    )
+      sources.set(label + href, { label, href });
+    node.content?.forEach(visit);
+  }
+
+  if (document) visit(document);
+  return [...sources.values()].sort(
+    (a, b) => Number(a.label.slice(1, -1)) - Number(b.label.slice(1, -1)),
+  );
+}
 
 function coverImageSource(fields: DraftFields) {
   if (fields.coverMediaId)
@@ -189,6 +214,24 @@ function EditorForm({ post }: { post?: PostDetail }) {
     editable: !isPublished,
     content: post?.content ?? emptyContent,
     editorProps: {
+      handleClick: (_view, _position, event) => {
+        if (
+          post?.origin !== "ai" ||
+          event.button !== 0 ||
+          !(event.target instanceof Element)
+        )
+          return false;
+        const link = event.target.closest("a");
+        if (
+          !link ||
+          !citationLabel.test(link.textContent.trim()) ||
+          !isWebUrl(link.href)
+        )
+          return false;
+        event.preventDefault();
+        window.open(link.href, "_blank", "noopener,noreferrer");
+        return true;
+      },
       attributes: {
         role: "textbox",
         "aria-label": "본문",
@@ -227,6 +270,8 @@ function EditorForm({ post }: { post?: PostDetail }) {
       link: current?.isActive("link"),
       undo: current?.can().undo(),
       redo: current?.can().redo(),
+      sources:
+        post?.origin === "ai" ? collectEditorSources(current?.getJSON()) : [],
     }),
   });
 
@@ -786,6 +831,23 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 false,
                 !state?.redo,
               )}
+              {post && process.env.NODE_ENV === "development" && (
+                <AiRevision
+                  editor={editor}
+                  title={fields.title}
+                  disabled={
+                    isPublished ||
+                    saving ||
+                    changingPublication ||
+                    deletingDraft
+                  }
+                  onApplied={() =>
+                    setMessage(
+                      "AI 수정안을 반영했어요. 내용을 확인한 뒤 저장해 주세요.",
+                    )
+                  }
+                />
+              )}
             </div>
             {insertMode && (
               <div className="insert-panel">
@@ -828,6 +890,28 @@ function EditorForm({ post }: { post?: PostDetail }) {
             )}
             {!editor && <p role="status">편집기를 불러오는 중이에요.</p>}
             <EditorContent editor={editor} />
+            {!!state?.sources.length && (
+              <section
+                aria-label="초안 참고 출처"
+                className="mt-5 border-t pt-4"
+              >
+                <h2 className="mb-2 text-sm font-semibold">참고 출처</h2>
+                <ul className="space-y-2 text-sm">
+                  {state.sources.map(({ label, href }) => (
+                    <li key={label + href}>
+                      <a
+                        className="break-all underline"
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {label} {href}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </section>
           <aside className="editor-settings" aria-label="글 설정">
             <section>
