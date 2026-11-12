@@ -6,14 +6,45 @@ import {
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { apiError, body, guard, json } from "@/lib/local-admin";
 
+import {
+  createChatGptTicket,
+  isLocalChatGptRequest,
+  releaseChatGptTicket,
+} from "@/lib/chatgpt";
+
 export async function POST(request: Request) {
+  let chatGptTicket: string | undefined;
   try {
-    const { blogId } = await guard(request);
-    const input = await body(request, aiDraftRequestSchema, 16_000);
+    const { blogId, userId, secret } = await guard(request);
+    const { chatGptModel, ...input } = await body(
+      request,
+      aiDraftRequestSchema,
+    );
+    const localChatGpt = isLocalChatGptRequest(request);
+    if (
+      process.env.NODE_ENV === "development" &&
+      input.subject &&
+      !chatGptModel
+    )
+      throw new ManagementError(
+        400,
+        "ChatGPT를 연결하고 본문 작성 모델을 선택해 주세요.",
+      );
+    if (chatGptModel) {
+      if (!localChatGpt || !input.subject)
+        throw new ManagementError(
+          400,
+          "로컬 관리자에서 대상을 확인한 뒤 ChatGPT를 선택해 주세요.",
+        );
+      chatGptTicket = await createChatGptTicket(
+        { userId, secret },
+        chatGptModel,
+      );
+    }
     const init = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...input, blogId }),
+      body: JSON.stringify({ ...input, blogId, chatGptTicket }),
     };
 
     const isDevelopment = process.env.NODE_ENV === "development";
@@ -48,14 +79,16 @@ export async function POST(request: Request) {
           : "AI 초안을 생성하지 못했어요.";
       return json({ error: message }, response.status);
     }
-    const draft = aiDraftResponseSchema.safeParse(result);
-    if (!draft.success)
+    const output = aiDraftResponseSchema.safeParse(result);
+    if (!output.success)
       throw new ManagementError(
         502,
         "AI 글쓰기 서비스의 응답을 읽지 못했어요.",
       );
-    return json(draft.data);
+    return json(output.data);
   } catch (error) {
     return apiError(error);
+  } finally {
+    if (chatGptTicket) releaseChatGptTicket(chatGptTicket);
   }
 }
