@@ -29,6 +29,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { AiRevision } from "./ai-revision";
+import { citationLabel } from "./ai-revision-passage";
 import { createEditorExtensions } from "./editor-extensions";
 import {
   draftKey,
@@ -47,6 +48,7 @@ import {
   postResponseSchema,
   postInputSchema,
   postPublicationResponseSchema,
+  postQaResponseSchema,
   validationMessages,
   type PostDetail,
   type PostPublication,
@@ -54,8 +56,6 @@ import {
 import { uploadBlogImage } from "@/lib/upload-blog-image";
 import { useApiResource } from "../management/use-api-resource";
 import { statusLabels } from "./post-status";
-
-const citationLabel = /^\[\d+\]$/;
 
 function collectEditorSources(document: JSONContent | undefined) {
   const sources = new Map<string, { label: string; href: string }>();
@@ -150,6 +150,13 @@ function EditorForm({ post }: { post?: PostDetail }) {
     categoriesResponseSchema,
   );
   const [revision, setRevision] = useState(post?.revision ?? 0);
+  const [reviewing, setReviewing] = useState(false);
+  const [qaError, setQaError] = useState("");
+  const qaUrl = post?.origin === "ai" ? `/api/admin/posts/${post.id}/qa` : "";
+  const qa = useApiResource(qaUrl, postQaResponseSchema);
+  const savedReview = qa.data?.review;
+  const currentReview = savedReview?.revision === revision ? savedReview : null;
+  const qaPassed = currentReview?.issues.length === 0;
   const [postStatus, setPostStatus] = useState(post?.status ?? "draft");
   const [publishedAt, setPublishedAt] = useState(post?.publishedAt ?? null);
   const [fields, setFields] = useState<DraftFields>({
@@ -207,7 +214,8 @@ function EditorForm({ post }: { post?: PostDetail }) {
     changingPublication ||
     deletingDraft ||
     uploadingCover ||
-    (!isPublished && post.origin === "ai");
+    reviewing ||
+    (!isPublished && post.origin === "ai" && !qaPassed);
   const editor = useEditor({
     extensions: createEditorExtensions(),
     immediatelyRender: false,
@@ -349,6 +357,30 @@ function EditorForm({ post }: { post?: PostDetail }) {
       setUploadingCover(false);
     }
   }
+  async function requestQa() {
+    if (
+      !qaUrl ||
+      dirty ||
+      reviewing ||
+      saving ||
+      changingPublication ||
+      deletingDraft
+    )
+      return;
+    setReviewing(true);
+    setQaError("");
+    try {
+      await qa.mutate("POST", qaUrl, { expectedRevision: revision });
+    } catch (error) {
+      setQaError(
+        error instanceof Error ? error.message : "검토를 요청하지 못했어요.",
+      );
+      qa.reload();
+    } finally {
+      setReviewing(false);
+    }
+  }
+
   async function saveDraft() {
     if (
       !editor ||
@@ -1174,13 +1206,80 @@ function EditorForm({ post }: { post?: PostDetail }) {
             </AlertDialog>
           )}
         </div>
+        {qaUrl && !isPublished && (
+          <section
+            className="sample-result w-full min-w-0"
+            aria-label="발행 전 QA"
+          >
+            <h3>발행 전 QA</h3>
+            <p role="status">
+              {dirty
+                ? "글을 저장한 뒤 검토를 요청해 주세요."
+                : reviewing
+                  ? "저장된 본문과 인용 원문을 대조하고 있어요."
+                  : qa.loading
+                    ? "저장된 검토 결과를 불러오고 있어요."
+                    : currentReview
+                      ? currentReview.issues.length
+                        ? "수정 필요"
+                        : "통과"
+                      : "검토 대기"}
+            </p>
+            {(qaError || qa.error) && (
+              <p className="editor-errors" role="alert">
+                {qaError || qa.error}
+              </p>
+            )}
+            {!dirty && currentReview && currentReview.issues.length > 0 && (
+              <ul>
+                {currentReview.issues.map(
+                  ({ excerpt, reason, sources }, index) => (
+                    <li key={index}>
+                      <strong>{excerpt}</strong>
+                      <p>{reason}</p>
+                      {sources.filter(isWebUrl).map((href) => (
+                        <p key={href}>
+                          <a
+                            className="text-primary underline"
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {new URL(href).hostname}
+                          </a>
+                        </p>
+                      ))}
+                    </li>
+                  ),
+                )}
+              </ul>
+            )}
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  dirty ||
+                  reviewing ||
+                  saving ||
+                  changingPublication ||
+                  deletingDraft ||
+                  uploadingCover
+                }
+                onClick={() => void requestQa()}
+              >
+                {currentReview ? "다시 검토" : "QA 검토 요청"}
+              </Button>
+            </div>
+          </section>
+        )}
         <small id="publish-note">
           {!post || dirty
             ? "먼저 글을 저장해 주세요."
             : isPublished
               ? "글을 수정하려면 비공개로 전환해 주세요."
-              : post.origin === "ai"
-                ? "AI 글은 검수 흐름을 거친 뒤 발행할 수 있어요."
+              : post.origin === "ai" && !qaPassed
+                ? "최신 저장본이 발행 전 QA를 통과하면 발행할 수 있어요."
                 : "현재 저장된 버전을 발행할 수 있어요."}
         </small>
       </div>

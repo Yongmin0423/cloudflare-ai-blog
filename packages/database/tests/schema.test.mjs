@@ -29,7 +29,7 @@ function addMedia(db, id = "m", blog = "a") {
   ).run(id, blog, `${blog}/${id}.png`, "image.png", "image/png", 100);
 }
 
-test("migration creates eight business tables and local defaults", () => {
+test("migration creates nine business tables and local defaults", () => {
   const db = database();
   try {
     assert.equal(
@@ -38,7 +38,7 @@ test("migration creates eight business tables and local defaults", () => {
           "SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'auth_%'",
         )
         .get().n,
-      8,
+      9,
     );
     addPost(db);
     const row = db.prepare("SELECT * FROM posts").get();

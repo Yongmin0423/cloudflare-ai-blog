@@ -1,7 +1,7 @@
 "use client";
 
 import type { Editor } from "@tiptap/react";
-import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { revisionPassages } from "./ai-revision-passage";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   aiRevisionResponseSchema,
@@ -18,32 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { useApiResource } from "@/features/management/use-api-resource";
 
-type SelectedPassage = {
-  document: ProseMirrorNode;
-  from: number;
-  to: number;
-  text: string;
-};
-
-function selectedPassage(editor: Editor): SelectedPassage | null {
-  const { doc, selection } = editor.state;
-  const { from, to, $from, $to } = selection;
-  if (
-    selection.empty ||
-    !$from.sameParent($to) ||
-    $from.parent.type.name !== "paragraph"
-  )
-    return null;
-
-  let plainText = true;
-  $from.parent.nodesBetween($from.parentOffset, $to.parentOffset, (node) => {
-    if (!node.isText || node.marks.length) plainText = false;
-  });
-
-  const text = doc.textBetween(from, to);
-  if (!plainText || !text.trim() || text.length > 2500) return null;
-  return { document: doc, from, to, text };
-}
+type RevisionTargets = ReturnType<typeof revisionPassages>;
 
 export function AiRevision({
   editor,
@@ -57,13 +32,14 @@ export function AiRevision({
   onApplied: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [passage, setPassage] = useState<SelectedPassage | null>(null);
+  const [targets, setTargets] = useState<RevisionTargets | null>(null);
 
   return (
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (nextOpen) setPassage(editor ? selectedPassage(editor) : null);
+        if (nextOpen)
+          setTargets(editor ? revisionPassages(editor.state) : null);
         setOpen(nextOpen);
       }}
     >
@@ -82,16 +58,15 @@ export function AiRevision({
         <DialogHeader>
           <DialogTitle>AI로 본문 다듬기</DialogTitle>
           <DialogDescription>
-            현재 초안의 내용으로 선택한 문장을 다듬어요. 수정안을 확인하고
-            편집기에 반영할 수 있어요.
+            현재 초안에서 다듬을 문단을 고르고 수정안을 확인해요.
           </DialogDescription>
         </DialogHeader>
         {open &&
-          (editor && passage ? (
+          (editor && targets?.passages.length ? (
             <RevisionForm
               editor={editor}
               title={title}
-              passage={passage}
+              targets={targets}
               onApplied={() => {
                 setOpen(false);
                 onApplied();
@@ -99,8 +74,8 @@ export function AiRevision({
             />
           ) : (
             <p>
-              본문의 한 문단에서 서식이나 인용 링크가 없는 문장을 최대
-              2,500자까지 선택해 주세요.
+              다듬을 수 있는 문단이 없어요. 본문에서 일반 텍스트를 최대
+              2,500자까지 선택한 뒤 다시 열어 주세요.
             </p>
           ))}
       </DialogContent>
@@ -111,14 +86,16 @@ export function AiRevision({
 function RevisionForm({
   editor,
   title,
-  passage,
+  targets,
   onApplied,
 }: {
   editor: Editor;
   title: string;
-  passage: SelectedPassage;
+  targets: RevisionTargets;
   onApplied: () => void;
 }) {
+  const [passageIndex, setPassageIndex] = useState(targets.initialIndex);
+  const passage = targets.passages[passageIndex];
   const status = useApiResource("/api/admin/chatgpt", chatGptStatusSchema);
   const [model, setModel] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -151,10 +128,10 @@ function RevisionForm({
           model: selectedModel,
           title,
           selection: passage.text,
-          context: passage.document
+          context: targets.document
             .textBetween(
               Math.max(0, passage.from - 4500),
-              Math.min(passage.document.content.size, passage.to + 4500),
+              Math.min(targets.document.content.size, passage.to + 4500),
               "\n\n",
             )
             .slice(0, 12_000),
@@ -187,7 +164,7 @@ function RevisionForm({
     if (
       !proposal ||
       !editor.isEditable ||
-      !editor.state.doc.eq(passage.document)
+      !editor.state.doc.eq(targets.document)
     ) {
       setError("본문이 바뀌었어요. 다시 선택해서 수정안을 요청해 주세요.");
       return;
@@ -206,6 +183,26 @@ function RevisionForm({
 
   return (
     <form className="management-form" onSubmit={revise}>
+      <label>
+        수정할 부분
+        <select
+          value={passageIndex}
+          disabled={pending}
+          onChange={(event) => {
+            setPassageIndex(Number(event.target.value));
+            setProposal("");
+            setError("");
+          }}
+        >
+          {targets.passages.map(({ from, to, text, selected }, index) => (
+            <option key={`${from}-${to}`} value={index}>
+              {selected ? "선택한 문장 · " : ""}
+              {text.trim().slice(0, 58)}
+              {text.trim().length > 58 ? "…" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
       <div>
         <strong>선택한 원문</strong>
         <p className="mt-2 whitespace-pre-wrap">{passage.text}</p>

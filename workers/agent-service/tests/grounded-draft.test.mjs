@@ -35,6 +35,64 @@ registerHooks({
 
 const { generateDraft, suggestDraftSubject } =
   await import("../src/generate-draft.ts");
+const { reviewPost } = await import("../src/review-post.ts");
+
+test("pre-publication QA checks saved text against its citation and returns actionable issues", async (t) => {
+  const originalUrl = "https://manufacturer.example/product";
+  const finalUrl = "https://manufacturer.example/current-product";
+  t.mock.method(globalThis, "fetch", async (request) => {
+    const url =
+      typeof request === "string" ? request : (request.url ?? request.href);
+    if (url === originalUrl) return Response.redirect(finalUrl);
+    assert.equal(url, finalUrl);
+    return new Response("한국용 모델의 배터리 용량은 3,500mAh입니다.", {
+      headers: { "Content-Type": "text/plain" },
+    });
+  });
+  const text = "한국용 모델은 7,000mAh 배터리를 탑재합니다.";
+  const reason = "원문에 기재된 한국용 모델의 용량은 3,500mAh예요.";
+  const env = {
+    AI: {
+      async run(_model, request) {
+        assert.equal(request.response_format.json_schema.name, "post_qa");
+        const { blocks, pages } = JSON.parse(request.messages[1].content);
+        assert.equal(pages[0].url, finalUrl);
+        assert.deepEqual(blocks.block_2.sourceIds, [pages[0].id]);
+        const verdicts = { block_1: "pass", block_2: reason };
+        return {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: JSON.stringify(verdicts) },
+            },
+          ],
+        };
+      },
+    },
+  };
+  const issues = await reviewPost(env, {
+    title: "모델별 배터리 사양",
+    content: {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: text + " " },
+            {
+              type: "text",
+              text: "[1]",
+              marks: [{ type: "link", attrs: { href: originalUrl } }],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(issues, [
+    { excerpt: text + " [1]", reason, sources: [originalUrl] },
+  ]);
+});
 
 const settings = {
   name: "테스트 블로그",

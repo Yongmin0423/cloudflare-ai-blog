@@ -72,12 +72,12 @@ const groundedPlanInstructions = [
   "Include a section only when its answerBrief states concrete information supported by the extracted evidence. Where possible, give its direct answer and two or three distinct details worth explaining. Write at least two distinct sections when possible. Return an empty outline if evidence cannot support a useful article.",
 ].join(" ");
 
-const automaticSourcePolicy =
+export const automaticSourcePolicy =
   "Prefer primary sources. A reputable report that explicitly attributes a statement to the responsible organization can support that statement with clear attribution when its primary source is unavailable. Wiki entries, aggregators, and forums can suggest leads but cannot on their own establish an official fact.";
 
 const referenceSourcePolicy = `${automaticSourcePolicy} Pages marked provided and excerpts marked sourceProvided are administrator references. A provided review or guide may support its author's directly relevant observations or documented procedures; attribute observations to their author. A provided link does not establish authority or relevance.`;
 
-const regionalScopeInstructions =
+export const regionalScopeInstructions =
   "For a regional date or availability claim, require a source entry that explicitly connects the place with that exact date or availability. A place appearing elsewhere in the article or in an adjacent table row does not establish the connection. Match the intended region when requested, and include other markets only when they help answer the reader's question.";
 
 const factualWritingInstructions = [
@@ -127,6 +127,7 @@ const generationStageLabels = {
   article_plan: "목차 작성",
   article_draft: "본문 작성",
   article_fact_check: "사실 검증",
+  post_qa: "발행 전 QA",
 };
 
 type GenerationStage = keyof typeof generationStageLabels;
@@ -140,7 +141,7 @@ class DraftResponseFormatError extends ManagementError {
   }
 }
 
-async function generate<T extends z.ZodType>(
+export async function generate<T extends z.ZodType>(
   env: AgentServiceEnv,
   schema: T,
   name: GenerationStage,
@@ -269,7 +270,9 @@ async function generateWorkersAi(
   }
 }
 
-async function runWithFormatRetry<T>(run: (feedback?: string) => Promise<T>) {
+export async function runWithFormatRetry<T>(
+  run: (feedback?: string) => Promise<T>,
+) {
   try {
     return { value: await run(), retried: false };
   } catch (error) {
