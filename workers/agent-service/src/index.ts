@@ -1,15 +1,19 @@
 import { Agent, getAgentByName } from "agents";
 import {
   createPost,
+  getPost,
+  savePostQaReview,
   getSettings,
   ManagementError,
 } from "@cloudflare-ai-blog/database";
 import {
   agentDraftRequestSchema,
+  agentPostQaRequestSchema,
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
 import { generateDraft, suggestDraftSubject } from "./generate-draft";
+import { reviewPost } from "./review-post";
 
 type Draft = { id: string; title: string };
 type DraftResult =
@@ -114,11 +118,51 @@ export class MainAgent extends Agent<AgentServiceEnv> {
   }
 }
 
+async function reviewSavedPost(request: Request, env: AgentServiceEnv) {
+  const parsed = agentPostQaRequestSchema.safeParse(
+    await request.json().catch(() => null),
+  );
+  if (!parsed.success)
+    return Response.json(
+      { error: "올바른 QA 요청이 아니에요." },
+      { status: 400 },
+    );
+
+  const { blogId, postId, expectedRevision } = parsed.data;
+  try {
+    const post = await retryDatabase(() => getPost(env.DB, blogId, postId));
+    if (
+      post.origin !== "ai" ||
+      post.status === "published" ||
+      post.revision !== expectedRevision
+    )
+      throw new ManagementError(
+        409,
+        "검토할 AI 초안의 최신 저장본을 확인해 주세요.",
+      );
+
+    const issues = await reviewPost(env, post);
+    const review = await retryDatabase(() =>
+      savePostQaReview(env.DB, blogId, postId, expectedRevision, issues),
+    );
+    return Response.json({ review });
+  } catch (error) {
+    if (error instanceof ManagementError)
+      return Response.json({ error: error.message }, { status: error.status });
+    console.error("Publication QA failed", { postId, expectedRevision });
+    return Response.json(
+      { error: "발행 전 QA를 완료하지 못했어요. 다시 시도해 주세요." },
+      { status: 503 },
+    );
+  }
+}
+
 export default {
   async fetch(request: Request, env: AgentServiceEnv) {
+    const { pathname } = new URL(request.url);
     if (
       request.method !== "POST" ||
-      new URL(request.url).pathname !== "/drafts"
+      !["/drafts", "/post-qa"].includes(pathname)
     )
       return new Response(null, { status: 404 });
     if (
@@ -126,6 +170,8 @@ export default {
       request.headers.get("content-type") !== "application/json"
     )
       return new Response(null, { status: 403 });
+
+    if (pathname === "/post-qa") return reviewSavedPost(request, env);
 
     const input = agentDraftRequestSchema.safeParse(
       await request.json().catch(() => null),

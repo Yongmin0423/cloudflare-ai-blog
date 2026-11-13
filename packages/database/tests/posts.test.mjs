@@ -18,6 +18,8 @@ const {
   updatePost,
   deletePostDraft,
   setPostPublication,
+  getPostQaReview,
+  savePostQaReview,
   listPosts,
   getPostDashboard,
   createCategory,
@@ -460,6 +462,50 @@ test("an empty draft or an AI draft without QA cannot be published", async () =>
     );
     assert.equal((await getPost(db, "a", empty.id)).revision, 1);
     assert.equal((await getPost(db, "a", ai.id)).status, "draft");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("AI publication requires a clean QA result for the current saved revision", async () => {
+  const { db, sqlite } = database();
+  try {
+    const post = await createPost(db, "a", input, { origin: "ai" });
+    const publish = (revision) =>
+      setPostPublication(db, "a", post.id, {
+        status: "published",
+        expectedRevision: revision,
+      });
+    const issue = {
+      excerpt: "검토할 문장",
+      reason: "출처를 추가해 주세요.",
+      sources: [],
+    };
+    await savePostQaReview(db, "a", post.id, post.revision, [issue]);
+    assert.deepEqual((await getPostQaReview(db, "a", post.id)).issues, [issue]);
+    await assert.rejects(() => publish(post.revision), { status: 409 });
+
+    await savePostQaReview(db, "a", post.id, post.revision, []);
+    const edited = await updatePost(
+      db,
+      "a",
+      post.id,
+      { ...input, title: "수정한 제목" },
+      post.revision,
+    );
+    assert.equal(await getPostQaReview(db, "a", post.id), null);
+    await assert.rejects(
+      () => savePostQaReview(db, "a", post.id, post.revision, []),
+      { status: 409 },
+    );
+    await assert.rejects(
+      () => savePostQaReview(db, "b", post.id, edited.revision, []),
+      { status: 409 },
+    );
+    await assert.rejects(() => publish(edited.revision), { status: 409 });
+
+    await savePostQaReview(db, "a", post.id, edited.revision, []);
+    assert.equal((await publish(edited.revision)).status, "published");
   } finally {
     sqlite.close();
   }

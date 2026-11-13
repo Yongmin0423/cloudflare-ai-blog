@@ -17,6 +17,8 @@ export {
   updatePost,
   deletePostDraft,
   setPostPublication,
+  getPostQaReview,
+  savePostQaReview,
   listPosts,
   getPostDashboard,
 } from "./posts";

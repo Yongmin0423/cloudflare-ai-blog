@@ -16,9 +16,10 @@ export type SourcePage = {
   url: string;
   text: string;
   provided?: true;
+  requestedUrls?: string[];
 };
 
-function sourceUrl(value: string) {
+export function sourceUrl(value: string) {
   try {
     const url = new URL(value);
     if (
@@ -275,6 +276,7 @@ async function readSources(
         url: finalUrl,
         text,
         provided,
+        requestedUrl: url,
       };
     }),
   );
@@ -294,9 +296,15 @@ async function readSources(
   const sources = new Map<string, SourcePage>();
   for (const result of pages) {
     if (result.status !== "fulfilled" || !result.value) continue;
-    const page = result.value;
-    if (!sources.has(page.url))
-      sources.set(page.url, { ...page, id: `source_${sources.size + 1}` });
+    const { requestedUrl, ...page } = result.value;
+    const existing = sources.get(page.url);
+    if (existing) existing.requestedUrls?.push(requestedUrl);
+    else
+      sources.set(page.url, {
+        ...page,
+        id: `source_${sources.size + 1}`,
+        requestedUrls: [requestedUrl],
+      });
   }
   if (!sources.size)
     throw new ManagementError(
