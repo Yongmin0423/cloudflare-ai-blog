@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   countPublishedPosts,
   listPublishedPosts,
+  listPublishedSitemapPosts,
   listPublicCategories,
   readPublishedCover,
   readPublishedPost,
@@ -15,8 +16,12 @@ const {
   createPost,
   getPost,
   updatePost,
+  deletePostDraft,
   setPostPublication,
+  getPostQaReview,
+  savePostQaReview,
   listPosts,
+  getPostDashboard,
   createCategory,
 } = await import("../src/management.ts");
 function database() {
@@ -45,6 +50,7 @@ function database() {
           return { results: stmt.all(...bound) };
         },
         async run() {
+          if (stmt.columns().length) return { results: stmt.all(...bound) };
           return { meta: { changes: Number(stmt.run(...bound).changes) } };
         },
       };
@@ -461,6 +467,50 @@ test("an empty draft or an AI draft without QA cannot be published", async () =>
   }
 });
 
+test("AI publication requires a clean QA result for the current saved revision", async () => {
+  const { db, sqlite } = database();
+  try {
+    const post = await createPost(db, "a", input, { origin: "ai" });
+    const publish = (revision) =>
+      setPostPublication(db, "a", post.id, {
+        status: "published",
+        expectedRevision: revision,
+      });
+    const issue = {
+      excerpt: "검토할 문장",
+      reason: "출처를 추가해 주세요.",
+      sources: [],
+    };
+    await savePostQaReview(db, "a", post.id, post.revision, [issue]);
+    assert.deepEqual((await getPostQaReview(db, "a", post.id)).issues, [issue]);
+    await assert.rejects(() => publish(post.revision), { status: 409 });
+
+    await savePostQaReview(db, "a", post.id, post.revision, []);
+    const edited = await updatePost(
+      db,
+      "a",
+      post.id,
+      { ...input, title: "수정한 제목" },
+      post.revision,
+    );
+    assert.equal(await getPostQaReview(db, "a", post.id), null);
+    await assert.rejects(
+      () => savePostQaReview(db, "a", post.id, post.revision, []),
+      { status: 409 },
+    );
+    await assert.rejects(
+      () => savePostQaReview(db, "b", post.id, edited.revision, []),
+      { status: 409 },
+    );
+    await assert.rejects(() => publish(edited.revision), { status: 409 });
+
+    await savePostQaReview(db, "a", post.id, edited.revision, []);
+    assert.equal((await publish(edited.revision)).status, "published");
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("public queries expose only this blog's published posts and covers attached to those posts", async () => {
   const { db, sqlite } = database();
   try {
@@ -531,10 +581,16 @@ test("public queries expose only this blog's published posts and covers attached
       [publicPost.id],
     );
     assert.equal(visible[0].categorySlug, category.slug);
-    assert.equal(
-      (await readPublishedPost(db, "a", publicPost.slug)).content.type,
-      "doc",
-    );
+    const detail = await readPublishedPost(db, "a", publicPost.slug);
+    assert.equal(detail.content.type, "doc");
+    assert.equal(detail.seoTitle, input.seoTitle);
+    assert.equal(detail.seoDescription, input.seoDescription);
+    assert.equal(detail.contentUpdatedAt, publicPost.updatedAt);
+    const sitemap = await listPublishedSitemapPosts(db, "a");
+    assert.equal(sitemap.length, 1);
+    assert.equal(sitemap[0].slug, publicPost.slug);
+    assert.equal(sitemap[0].publishedAt, detail.publishedAt);
+    assert.equal(sitemap[0].contentUpdatedAt, detail.contentUpdatedAt);
     for (const post of [draft, hidden, otherPost]) {
       assert.equal(await readPublishedPost(db, "a", post.slug), null);
       assert.equal(await readPublishedCover(db, "a", post.id, mediaId), null);
@@ -593,6 +649,111 @@ test("server list search, literal wildcard, category, status and pagination stay
       0,
     );
     assert.equal((await listPosts(db, "a", { ...q, page: 999 })).page, 2);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("deleting a draft requires its latest revision and preserves published and private posts", async () => {
+  const { db, sqlite } = database();
+  try {
+    const draft = await createPost(db, "a", input, { origin: "ai" });
+    const manual = await createPost(db, "a", { ...input, slug: "manual" });
+    await assert.rejects(deletePostDraft(db, "b", draft.id, draft.revision), {
+      status: 404,
+    });
+    const edited = await updatePost(
+      db,
+      "a",
+      draft.id,
+      { ...input, title: "수정한 초안" },
+      draft.revision,
+    );
+    await assert.rejects(deletePostDraft(db, "a", draft.id, draft.revision), {
+      status: 409,
+    });
+    await deletePostDraft(db, "a", draft.id, edited.revision);
+    await assert.rejects(getPost(db, "a", draft.id), { status: 404 });
+    assert.equal(
+      sqlite.prepare("SELECT 1 FROM post_seo WHERE post_id=?").get(draft.id),
+      undefined,
+    );
+
+    const published = await setPostPublication(db, "a", manual.id, {
+      status: "published",
+      expectedRevision: manual.revision,
+    });
+    await assert.rejects(
+      deletePostDraft(db, "a", manual.id, published.revision),
+      { status: 409 },
+    );
+    const hidden = await setPostPublication(db, "a", manual.id, {
+      status: "private",
+      expectedRevision: published.revision,
+    });
+    await assert.rejects(deletePostDraft(db, "a", manual.id, hidden.revision), {
+      status: 409,
+    });
+    assert.equal((await getPost(db, "a", manual.id)).status, "private");
+
+    const anotherDraft = await createPost(db, "a", {
+      ...input,
+      slug: "another-draft",
+    });
+    await deletePostDraft(db, "a", anotherDraft.id, anotherDraft.revision);
+    await assert.rejects(getPost(db, "a", anotherDraft.id), { status: 404 });
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("dashboard counts every status and returns only the five latest posts for this blog", async () => {
+  const { db, sqlite } = database();
+  try {
+    assert.deepEqual((await getPostDashboard(db, "a")).recentPosts, []);
+    assert.deepEqual(
+      { ...(await getPostDashboard(db, "a")).counts },
+      { total: 0, draft: 0, published: 0, private: 0 },
+    );
+
+    const insert = sqlite.prepare(
+      `INSERT INTO posts(id,blog_id,title,slug,status,created_at,updated_at,content_updated_at,published_at)
+      VALUES(?,?,?,?,?,1000,?,1000,?)`,
+    );
+    const ids = Array.from({ length: 6 }, () => crypto.randomUUID());
+    for (const [index, id] of ids.entries()) {
+      const status =
+        index < 4 ? "draft" : index === 4 ? "published" : "private";
+      insert.run(
+        id,
+        "a",
+        `글 ${index}`,
+        `post-${index}`,
+        status,
+        1000 + index,
+        status === "published" ? 1000 : null,
+      );
+    }
+    insert.run(
+      crypto.randomUUID(),
+      "b",
+      "다른 블로그",
+      "other-post",
+      "published",
+      2000,
+      1000,
+    );
+
+    const { counts, recentPosts } = await getPostDashboard(db, "a");
+    assert.deepEqual(
+      { ...counts },
+      { total: 6, draft: 4, published: 1, private: 1 },
+    );
+    assert.deepEqual(
+      recentPosts.map((post) => post.id),
+      ids.slice(1).reverse(),
+    );
+    assert.equal(recentPosts[0].category, "미분류");
   } finally {
     sqlite.close();
   }

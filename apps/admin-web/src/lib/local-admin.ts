@@ -36,7 +36,12 @@ export async function guard(
       ))
   )
     throw new ManagementError(403, "허용하지 않은 관리 요청이에요.");
-  return { db: administrator.db, blogId: administrator.blogId };
+  return {
+    db: administrator.db,
+    blogId: administrator.blogId,
+    userId: administrator.user.id,
+    secret: administrator.settings.secret,
+  };
 }
 
 // JSON을 반환하는 함수

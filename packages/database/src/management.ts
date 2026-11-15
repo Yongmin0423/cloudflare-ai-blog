@@ -1,8 +1,10 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import {
+  blogSettingsInputSchema,
   categoryInputSchema,
   settingsSchema,
   type BlogSettings,
+  type BlogSettingsInput,
   type CategoryInput,
   type CategoryRecord,
   type SettingsResponse,
@@ -13,8 +15,12 @@ export {
   getPost,
   createPost,
   updatePost,
+  deletePostDraft,
   setPostPublication,
+  getPostQaReview,
+  savePostQaReview,
   listPosts,
+  getPostDashboard,
 } from "./posts";
 export class ManagementError extends Error {
   constructor(
@@ -47,29 +53,69 @@ export async function getSettings(
     .prepare(
       `SELECT b.name, b.description, b.language, b.updated_at AS updatedAt,
     coalesce(s.topic,'') AS topic, coalesce(s.audience,'') AS audience, coalesce(s.tone,'') AS tone,
-    coalesce(s.rules,'') AS rules, coalesce(s.avoid_expressions,'') AS avoid
-    FROM blogs b LEFT JOIN blog_writing_settings s ON s.blog_id=b.id WHERE b.id=?`,
+    coalesce(s.rules,'') AS rules, coalesce(s.avoid_expressions,'') AS avoid,
+    coalesce(seo.meta_title,'') AS seoTitle, coalesce(seo.description,'') AS seoDescription,
+    seo.share_media_id AS shareMediaId, coalesce(seo.share_image_alt,'') AS shareImageAlt
+    FROM blogs b LEFT JOIN blog_writing_settings s ON s.blog_id=b.id
+    LEFT JOIN blog_seo seo ON seo.blog_id=b.id WHERE b.id=?`,
     )
     .bind(blogId)
-    .first<BlogSettings & { updatedAt: number }>();
+    .first<
+      Omit<BlogSettings, "seo"> & {
+        updatedAt: number;
+        seoTitle: string;
+        seoDescription: string;
+        shareMediaId: string | null;
+        shareImageAlt: string;
+      }
+    >();
   if (!row)
     throw new ManagementError(
       404,
       "블로그가 없어요. 로컬 초기 데이터를 먼저 준비해 주세요.",
     );
-  const { updatedAt, ...settings } = row;
-  return { settings: settingsSchema.parse(settings), updatedAt };
+  const {
+    updatedAt,
+    seoTitle,
+    seoDescription,
+    shareMediaId,
+    shareImageAlt,
+    ...settings
+  } = row;
+  return {
+    settings: settingsSchema.parse({
+      ...settings,
+      seo: {
+        title: seoTitle,
+        description: seoDescription,
+        shareMediaId,
+        shareImageAlt,
+      },
+    }),
+    updatedAt,
+  };
 }
 export async function saveSettings(
   db: Database,
   blogId: string,
-  input: BlogSettings,
+  input: BlogSettingsInput,
   expected: number,
 ) {
-  const settings = settingsSchema.parse(input);
+  const settings = blogSettingsInputSchema.parse(input);
   const now = Math.max(Date.now(), expected + 1);
-  // Both statements share one atomic D1 batch. Guard BOTH by the same version.
-  // Write settings first so the blog's old version remains visible to its guard.
+  const { seo } = settings;
+  if (seo?.shareMediaId) {
+    const media = await db
+      .prepare("SELECT 1 FROM media WHERE blog_id=? AND id=?")
+      .bind(blogId, seo.shareMediaId)
+      .first();
+    if (!media)
+      throw new ManagementError(
+        400,
+        "이 블로그에 업로드된 공유 이미지를 찾을 수 없어요.",
+      );
+  }
+  // Write settings first, while all statements in the batch can check the same old version.
   const result = await db.batch([
     db
       .prepare(
@@ -88,6 +134,26 @@ export async function saveSettings(
         blogId,
         expected,
       ),
+    ...(seo
+      ? [
+          db
+            .prepare(
+              `INSERT INTO blog_seo(blog_id,meta_title,description,share_media_id,share_image_alt)
+        SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM blogs WHERE id=? AND updated_at=?)
+        ON CONFLICT(blog_id) DO UPDATE SET meta_title=excluded.meta_title,description=excluded.description,
+        share_media_id=excluded.share_media_id,share_image_alt=excluded.share_image_alt`,
+            )
+            .bind(
+              blogId,
+              seo.title,
+              seo.description,
+              seo.shareMediaId,
+              seo.shareImageAlt,
+              blogId,
+              expected,
+            ),
+        ]
+      : []),
     db
       .prepare(
         "UPDATE blogs SET name=?,description=?,language=?,updated_at=? WHERE id=? AND updated_at=?",
@@ -101,7 +167,7 @@ export async function saveSettings(
         expected,
       ),
   ]);
-  if (result[1].meta.changes !== 1)
+  if (result.at(-1)?.meta.changes !== 1)
     throw new ManagementError(
       409,
       "다른 화면에서 설정이 변경됐어요. 새로고침 후 다시 저장해 주세요.",

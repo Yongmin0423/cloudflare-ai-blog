@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +28,8 @@ import {
   AlertDialogAction,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { AiRevision } from "./ai-revision";
+import { citationLabel } from "./ai-revision-passage";
 import { createEditorExtensions } from "./editor-extensions";
 import {
   draftKey,
@@ -43,17 +45,39 @@ import {
 } from "./editor-model";
 import {
   categoriesResponseSchema,
-  coverUploadResponseSchema,
-  MAX_COVER_IMAGE_BYTES,
   postResponseSchema,
   postInputSchema,
   postPublicationResponseSchema,
+  postQaResponseSchema,
   validationMessages,
   type PostDetail,
   type PostPublication,
 } from "@cloudflare-ai-blog/shared";
+import { uploadBlogImage } from "@/lib/upload-blog-image";
 import { useApiResource } from "../management/use-api-resource";
-import { statusLabels } from "./demo-posts";
+import { statusLabels } from "./post-status";
+
+function collectEditorSources(document: JSONContent | undefined) {
+  const sources = new Map<string, { label: string; href: string }>();
+
+  function visit(node: JSONContent) {
+    const label = node.text?.trim();
+    const href = node.marks?.find(({ type }) => type === "link")?.attrs?.href;
+    if (
+      label &&
+      citationLabel.test(label) &&
+      typeof href === "string" &&
+      isWebUrl(href)
+    )
+      sources.set(label + href, { label, href });
+    node.content?.forEach(visit);
+  }
+
+  if (document) visit(document);
+  return [...sources.values()].sort(
+    (a, b) => Number(a.label.slice(1, -1)) - Number(b.label.slice(1, -1)),
+  );
+}
 
 function coverImageSource(fields: DraftFields) {
   if (fields.coverMediaId)
@@ -126,6 +150,13 @@ function EditorForm({ post }: { post?: PostDetail }) {
     categoriesResponseSchema,
   );
   const [revision, setRevision] = useState(post?.revision ?? 0);
+  const [reviewing, setReviewing] = useState(false);
+  const [qaError, setQaError] = useState("");
+  const qaUrl = post?.origin === "ai" ? `/api/admin/posts/${post.id}/qa` : "";
+  const qa = useApiResource(qaUrl, postQaResponseSchema);
+  const savedReview = qa.data?.review;
+  const currentReview = savedReview?.revision === revision ? savedReview : null;
+  const qaPassed = currentReview?.issues.length === 0;
   const [postStatus, setPostStatus] = useState(post?.status ?? "draft");
   const [publishedAt, setPublishedAt] = useState(post?.publishedAt ?? null);
   const [fields, setFields] = useState<DraftFields>({
@@ -145,6 +176,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const [errors, setErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [changingPublication, setChangingPublication] = useState(false);
+  const [deletingDraft, setDeletingDraft] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [coverError, setCoverError] = useState("");
   const [availableDraft, setAvailableDraft] = useState<LocalDraft | null>(null);
@@ -168,6 +200,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const storageKey = draftKey(post?.id ?? "new");
   const isPublished = postStatus === "published";
   const slugLocked = publishedAt !== null;
+  const canDeleteDraft = !!post && postStatus === "draft" && !slugLocked;
   const publicationTarget = isPublished ? "private" : "published";
   const publicationLabel = isPublished
     ? "비공개 전환"
@@ -179,14 +212,34 @@ function EditorForm({ post }: { post?: PostDetail }) {
     dirty ||
     saving ||
     changingPublication ||
+    deletingDraft ||
     uploadingCover ||
-    (!isPublished && post.origin === "ai");
+    reviewing ||
+    (!isPublished && post.origin === "ai" && !qaPassed);
   const editor = useEditor({
     extensions: createEditorExtensions(),
     immediatelyRender: false,
     editable: !isPublished,
     content: post?.content ?? emptyContent,
     editorProps: {
+      handleClick: (_view, _position, event) => {
+        if (
+          post?.origin !== "ai" ||
+          event.button !== 0 ||
+          !(event.target instanceof Element)
+        )
+          return false;
+        const link = event.target.closest("a");
+        if (
+          !link ||
+          !citationLabel.test(link.textContent.trim()) ||
+          !isWebUrl(link.href)
+        )
+          return false;
+        event.preventDefault();
+        window.open(link.href, "_blank", "noopener,noreferrer");
+        return true;
+      },
       attributes: {
         role: "textbox",
         "aria-label": "본문",
@@ -225,6 +278,8 @@ function EditorForm({ post }: { post?: PostDetail }) {
       link: current?.isActive("link"),
       undo: current?.can().undo(),
       redo: current?.can().redo(),
+      sources:
+        post?.origin === "ai" ? collectEditorSources(current?.getJSON()) : [],
     }),
   });
 
@@ -276,35 +331,10 @@ function EditorForm({ post }: { post?: PostDetail }) {
   async function uploadCover(file: File) {
     if (isPublished || uploadingCoverRef.current || savingRef.current) return;
     setCoverError("");
-    if (file.size === 0 || file.size > MAX_COVER_IMAGE_BYTES) {
-      setCoverError("비어 있지 않은 5MB 이하의 이미지 파일을 선택해 주세요.");
-      return;
-    }
-
     uploadingCoverRef.current = true;
     setUploadingCover(true);
     try {
-      const response = await fetch("/api/admin/media", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "X-Image-Name": encodeURIComponent(file.name),
-        },
-        body: file,
-      });
-      const value = await response.json();
-      if (!response.ok) {
-        const errorMessage =
-          value && typeof value === "object" && "error" in value
-            ? value.error
-            : null;
-        throw new Error(
-          typeof errorMessage === "string"
-            ? errorMessage
-            : "이미지를 업로드하지 못했어요.",
-        );
-      }
-      const { mediaId } = coverUploadResponseSchema.parse(value);
+      const { mediaId } = await uploadBlogImage(file);
       setFields((previous) => ({
         ...previous,
         coverUrl: "",
@@ -327,6 +357,30 @@ function EditorForm({ post }: { post?: PostDetail }) {
       setUploadingCover(false);
     }
   }
+  async function requestQa() {
+    if (
+      !qaUrl ||
+      dirty ||
+      reviewing ||
+      saving ||
+      changingPublication ||
+      deletingDraft
+    )
+      return;
+    setReviewing(true);
+    setQaError("");
+    try {
+      await qa.mutate("POST", qaUrl, { expectedRevision: revision });
+    } catch (error) {
+      setQaError(
+        error instanceof Error ? error.message : "검토를 요청하지 못했어요.",
+      );
+      qa.reload();
+    } finally {
+      setReviewing(false);
+    }
+  }
+
   async function saveDraft() {
     if (
       !editor ||
@@ -472,6 +526,58 @@ function EditorForm({ post }: { post?: PostDetail }) {
       setChangingPublication(false);
       editor?.setEditable(editableAfterRequest, false);
     }
+  }
+  async function removeDraft() {
+    if (
+      !post ||
+      !canDeleteDraft ||
+      savingRef.current ||
+      uploadingCoverRef.current
+    )
+      return;
+
+    savingRef.current = true;
+    setDeletingDraft(true);
+    setErrors([]);
+    setMessage("");
+    editor?.setEditable(false, false);
+    try {
+      const response = await fetch(
+        "/api/admin/posts/" + encodeURIComponent(post.id),
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ expectedRevision: revision }),
+        },
+      );
+      if (!response.ok) {
+        const result: unknown = await response.json().catch(() => null);
+        throw new Error(
+          result &&
+            typeof result === "object" &&
+            "error" in result &&
+            typeof result.error === "string"
+            ? result.error
+            : "초안을 삭제하지 못했어요.",
+        );
+      }
+    } catch (error) {
+      setErrors([
+        error instanceof Error ? error.message : "초안을 삭제하지 못했어요.",
+      ]);
+      savingRef.current = false;
+      setDeletingDraft(false);
+      editor?.setEditable(true, false);
+      return;
+    }
+
+    try {
+      localStorage.removeItem(storageKey);
+    } catch {
+      // Browser storage access can fail after the server has deleted the draft.
+    }
+    allowLeave.current = true;
+    router.replace("/posts");
   }
   function restore() {
     if (
@@ -626,6 +732,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
               !!categories.error ||
               saving ||
               changingPublication ||
+              deletingDraft ||
               uploadingCover
             }
             className="outline-button"
@@ -652,7 +759,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
         </div>
       )}
       <fieldset
-        disabled={saving || changingPublication || isPublished}
+        disabled={saving || changingPublication || deletingDraft || isPublished}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
       >
         <div className="editor-grid">
@@ -756,6 +863,23 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 false,
                 !state?.redo,
               )}
+              {post && process.env.NODE_ENV === "development" && (
+                <AiRevision
+                  editor={editor}
+                  title={fields.title}
+                  disabled={
+                    isPublished ||
+                    saving ||
+                    changingPublication ||
+                    deletingDraft
+                  }
+                  onApplied={() =>
+                    setMessage(
+                      "AI 수정안을 반영했어요. 내용을 확인한 뒤 저장해 주세요.",
+                    )
+                  }
+                />
+              )}
             </div>
             {insertMode && (
               <div className="insert-panel">
@@ -798,6 +922,28 @@ function EditorForm({ post }: { post?: PostDetail }) {
             )}
             {!editor && <p role="status">편집기를 불러오는 중이에요.</p>}
             <EditorContent editor={editor} />
+            {!!state?.sources.length && (
+              <section
+                aria-label="초안 참고 출처"
+                className="mt-5 border-t pt-4"
+              >
+                <h2 className="mb-2 text-sm font-semibold">참고 출처</h2>
+                <ul className="space-y-2 text-sm">
+                  {state.sources.map(({ label, href }) => (
+                    <li key={label + href}>
+                      <a
+                        className="break-all underline"
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {label} {href}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
           </section>
           <aside className="editor-settings" aria-label="글 설정">
             <section>
@@ -933,16 +1079,20 @@ function EditorForm({ post }: { post?: PostDetail }) {
       </fieldset>
       <div className="editor-actionbar">
         <p ref={actionStatus} role="status" tabIndex={-1}>
-          {changingPublication
-            ? "발행 상태를 변경하고 있어요."
-            : message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "")}
+          {deletingDraft
+            ? "초안을 삭제하고 있어요."
+            : changingPublication
+              ? "발행 상태를 변경하고 있어요."
+              : message || (dirty ? "저장하지 않은 변경 사항이 있어요." : "")}
         </p>
         <div>
           <button
             ref={previewButton}
             type="button"
             className="outline-button"
-            disabled={!editor || uploadingCover || changingPublication}
+            disabled={
+              !editor || uploadingCover || changingPublication || deletingDraft
+            }
             onClick={showPreview}
           >
             미리보기
@@ -955,6 +1105,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 !editor ||
                 saving ||
                 changingPublication ||
+                deletingDraft ||
                 uploadingCover ||
                 !categories.ready ||
                 !!categories.error
@@ -1010,14 +1161,125 @@ function EditorForm({ post }: { post?: PostDetail }) {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+          {canDeleteDraft && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  className="outline-button"
+                  disabled={
+                    saving ||
+                    changingPublication ||
+                    uploadingCover ||
+                    deletingDraft
+                  }
+                >
+                  초안 삭제
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent
+                className="management-dialog"
+                onCloseAutoFocus={(event) => {
+                  if (savingRef.current) {
+                    event.preventDefault();
+                    actionStatus.current?.focus();
+                  }
+                }}
+              >
+                <AlertDialogHeader>
+                  <AlertDialogTitle>이 초안을 삭제할까요?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    삭제한 초안은 복구할 수 없어요.
+                    {dirty && " 저장하지 않은 수정 내용도 사라져요."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>취소</AlertDialogCancel>
+                  <AlertDialogAction
+                    className={buttonVariants({ variant: "destructive" })}
+                    onClick={() => void removeDraft()}
+                  >
+                    초안 삭제
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
+        {qaUrl && !isPublished && (
+          <section
+            className="sample-result w-full min-w-0"
+            aria-label="발행 전 QA"
+          >
+            <h3>발행 전 QA</h3>
+            <p role="status">
+              {dirty
+                ? "글을 저장한 뒤 검토를 요청해 주세요."
+                : reviewing
+                  ? "저장된 본문과 인용 원문을 대조하고 있어요."
+                  : qa.loading
+                    ? "저장된 검토 결과를 불러오고 있어요."
+                    : currentReview
+                      ? currentReview.issues.length
+                        ? "수정 필요"
+                        : "통과"
+                      : "검토 대기"}
+            </p>
+            {(qaError || qa.error) && (
+              <p className="editor-errors" role="alert">
+                {qaError || qa.error}
+              </p>
+            )}
+            {!dirty && currentReview && currentReview.issues.length > 0 && (
+              <ul>
+                {currentReview.issues.map(
+                  ({ excerpt, reason, sources }, index) => (
+                    <li key={index}>
+                      <strong>{excerpt}</strong>
+                      <p>{reason}</p>
+                      {sources.filter(isWebUrl).map((href) => (
+                        <p key={href}>
+                          <a
+                            className="text-primary underline"
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {new URL(href).hostname}
+                          </a>
+                        </p>
+                      ))}
+                    </li>
+                  ),
+                )}
+              </ul>
+            )}
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  dirty ||
+                  reviewing ||
+                  saving ||
+                  changingPublication ||
+                  deletingDraft ||
+                  uploadingCover
+                }
+                onClick={() => void requestQa()}
+              >
+                {currentReview ? "다시 검토" : "QA 검토 요청"}
+              </Button>
+            </div>
+          </section>
+        )}
         <small id="publish-note">
           {!post || dirty
             ? "먼저 글을 저장해 주세요."
             : isPublished
               ? "글을 수정하려면 비공개로 전환해 주세요."
-              : post.origin === "ai"
-                ? "AI 글은 검수 흐름을 거친 뒤 발행할 수 있어요."
+              : post.origin === "ai" && !qaPassed
+                ? "최신 저장본이 발행 전 QA를 통과하면 발행할 수 있어요."
                 : "현재 저장된 버전을 발행할 수 있어요."}
         </small>
       </div>

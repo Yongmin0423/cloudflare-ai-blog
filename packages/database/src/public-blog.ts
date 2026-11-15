@@ -10,6 +10,11 @@ export type PublicBlog = {
   name: string;
   description: string;
   language: "ko" | "en" | "ja";
+  domain: string | null;
+  seoTitle: string | null;
+  seoDescription: string | null;
+  shareMediaId: string | null;
+  shareImageAlt: string | null;
 };
 
 export type PublicCategory = {
@@ -33,7 +38,12 @@ export type PublishedPost = {
   coverAlt: string;
 };
 
-export type PublishedPostDetail = PublishedPost & { content: EditorDocument };
+export type PublishedPostDetail = PublishedPost & {
+  content: EditorDocument;
+  contentUpdatedAt: number;
+  seoTitle: string | null;
+  seoDescription: string | null;
+};
 
 const publishedCondition =
   "p.blog_id=? AND p.status='published' AND p.published_at IS NOT NULL";
@@ -45,7 +55,11 @@ const postJoins = `LEFT JOIN categories c ON c.blog_id=p.blog_id AND c.id=p.cate
 
 export function readPublicBlog(db: Database, blogId: string) {
   return db
-    .prepare("SELECT name,description,language FROM blogs WHERE id=?")
+    .prepare(
+      `SELECT b.name,b.description,b.language,b.domain,seo.meta_title AS seoTitle,
+      seo.description AS seoDescription,seo.share_media_id AS shareMediaId,seo.share_image_alt AS shareImageAlt
+      FROM blogs b LEFT JOIN blog_seo seo ON seo.blog_id=b.id WHERE b.id=?`,
+    )
     .bind(blogId)
     .first<PublicBlog>();
 }
@@ -117,14 +131,29 @@ export async function readPublishedPost(
 ): Promise<PublishedPostDetail | null> {
   const row = await db
     .prepare(
-      `SELECT ${postFields},p.content_json AS contentJson
-    FROM posts p ${postJoins} WHERE ${publishedCondition} AND p.slug=?`,
+      `SELECT ${postFields},p.content_json AS contentJson,p.content_updated_at AS contentUpdatedAt,
+    s.meta_title AS seoTitle,s.description AS seoDescription
+    FROM posts p ${postJoins}
+    LEFT JOIN post_seo s ON s.blog_id=p.blog_id AND s.post_id=p.id
+    WHERE ${publishedCondition} AND p.slug=?`,
     )
     .bind(blogId, slug)
-    .first<PublishedPost & { contentJson: string }>();
+    .first<Omit<PublishedPostDetail, "content"> & { contentJson: string }>();
   if (!row) return null;
   const { contentJson, ...post } = row;
   return { ...post, content: documentSchema.parse(JSON.parse(contentJson)) };
+}
+
+export async function listPublishedSitemapPosts(db: Database, blogId: string) {
+  const { results } = await db
+    .prepare(
+      `SELECT p.slug,p.published_at AS publishedAt,p.content_updated_at AS contentUpdatedAt
+    FROM posts p WHERE ${publishedCondition}
+    ORDER BY p.published_at DESC,p.id DESC LIMIT 50000`,
+    )
+    .bind(blogId)
+    .all<{ slug: string; publishedAt: number; contentUpdatedAt: number }>();
+  return results;
 }
 
 export function readPublishedCover(
@@ -141,5 +170,20 @@ export function readPublishedCover(
     WHERE ${publishedCondition} AND p.id=? AND m.id=?`,
     )
     .bind(blogId, postId, mediaId)
+    .first<{ key: string; mimeType: string }>();
+}
+
+export function readSiteShareImage(
+  db: Database,
+  blogId: string,
+  mediaId: string,
+) {
+  return db
+    .prepare(
+      `SELECT m.r2_key AS key,m.mime_type AS mimeType FROM blog_seo seo
+      JOIN media m ON m.blog_id=seo.blog_id AND m.id=seo.share_media_id
+      WHERE seo.blog_id=? AND m.id=?`,
+    )
+    .bind(blogId, mediaId)
     .first<{ key: string; mimeType: string }>();
 }

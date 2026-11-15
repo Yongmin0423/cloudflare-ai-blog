@@ -3,6 +3,8 @@ import {
   postInputSchema,
   postDetailSchema,
   postPublicationResponseSchema,
+  postQaReviewSchema,
+  type PostQaIssue,
   type PostInput,
   type PostListQuery,
   type EditorNode,
@@ -76,17 +78,23 @@ export async function createPost(
   db: Database,
   blogId: string,
   input: PostInput,
+  {
+    id = crypto.randomUUID(),
+    origin = "manual",
+  }: {
+    id?: string;
+    origin?: "manual" | "ai";
+  } = {},
 ) {
   const post = postInputSchema.parse(input);
-  const id = crypto.randomUUID();
   const now = Date.now();
   await checkCoverMedia(db, blogId, post.coverMediaId);
   try {
     await db.batch([
       db
         .prepare(
-          `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,created_at,updated_at,content_updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,origin,created_at,updated_at,content_updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         )
         .bind(
           id,
@@ -98,6 +106,7 @@ export async function createPost(
           excerpt(post),
           post.coverUrl,
           post.coverMediaId ? "" : post.coverAlt,
+          origin,
           now,
           now,
           now,
@@ -214,12 +223,103 @@ export async function updatePost(
   }
   return getPost(db, blogId, id);
 }
+export async function deletePostDraft(
+  db: Database,
+  blogId: string,
+  id: string,
+  expectedRevision: number,
+) {
+  const deleted = await db
+    .prepare(
+      `DELETE FROM posts
+      WHERE blog_id=? AND id=? AND revision=? AND status='draft' AND published_at IS NULL
+      RETURNING id`,
+    )
+    .bind(blogId, id, expectedRevision)
+    .first<{ id: string }>();
+  if (deleted) return;
+
+  const current = await db
+    .prepare(
+      "SELECT status,published_at AS publishedAt FROM posts WHERE blog_id=? AND id=?",
+    )
+    .bind(blogId, id)
+    .first<{ status: string; publishedAt: number | null }>();
+  if (!current) throw new ManagementError(404, "게시글을 찾을 수 없어요.");
+  if (current.status !== "draft" || current.publishedAt !== null)
+    throw new ManagementError(409, "발행한 적 없는 초안만 삭제할 수 있어요.");
+  throw new ManagementError(
+    409,
+    "다른 화면에서 초안이 변경됐어요. 최신 저장본을 확인한 뒤 다시 시도해 주세요.",
+  );
+}
+
 function hasPublishableContent(node: EditorNode): boolean {
   return (
     node.type === "image" ||
     !!node.text?.trim() ||
     (node.content?.some(hasPublishableContent) ?? false)
   );
+}
+
+export async function getPostQaReview(
+  db: Database,
+  blogId: string,
+  id: string,
+) {
+  const row = await db
+    .prepare(
+      `SELECT q.revision,q.reviewed_at AS reviewedAt,q.issues_json AS issuesJson
+      FROM post_qa_reviews q JOIN posts p
+      ON p.blog_id=q.blog_id AND p.id=q.post_id AND p.revision=q.revision
+      WHERE q.blog_id=? AND q.post_id=?`,
+    )
+    .bind(blogId, id)
+    .first<{ revision: number; reviewedAt: number; issuesJson: string }>();
+  return row
+    ? postQaReviewSchema.parse({
+        revision: row.revision,
+        reviewedAt: row.reviewedAt,
+        issues: JSON.parse(row.issuesJson),
+      })
+    : null;
+}
+
+export async function savePostQaReview(
+  db: Database,
+  blogId: string,
+  id: string,
+  revision: number,
+  issues: PostQaIssue[],
+) {
+  const review = postQaReviewSchema.parse({
+    revision,
+    reviewedAt: Date.now(),
+    issues,
+  });
+  const saved = await db
+    .prepare(
+      `INSERT INTO post_qa_reviews (blog_id,post_id,revision,reviewed_at,issues_json)
+      SELECT blog_id,id,revision,?,? FROM posts
+      WHERE blog_id=? AND id=? AND revision=? AND origin='ai' AND status IN ('draft','private')
+      ON CONFLICT(post_id) DO UPDATE SET
+        revision=excluded.revision,reviewed_at=excluded.reviewed_at,issues_json=excluded.issues_json
+      RETURNING revision`,
+    )
+    .bind(
+      review.reviewedAt,
+      JSON.stringify(review.issues),
+      blogId,
+      id,
+      revision,
+    )
+    .first();
+  if (!saved)
+    throw new ManagementError(
+      409,
+      "검토하는 동안 글이 변경됐어요. 최신 저장본으로 다시 검토해 주세요.",
+    );
+  return review;
 }
 
 export async function setPostPublication(
@@ -239,11 +339,18 @@ export async function setPostPublication(
   if (status === "published") {
     if (current.status === "published")
       throw new ManagementError(409, "이미 발행 상태인 글이에요.");
-    if (current.origin === "ai")
-      throw new ManagementError(
-        409,
-        "AI 글은 검수 흐름을 거쳐야 발행할 수 있어요.",
-      );
+    if (current.origin === "ai") {
+      const review = await getPostQaReview(db, blogId, id);
+      if (
+        !review ||
+        review.revision !== expectedRevision ||
+        review.issues.length
+      )
+        throw new ManagementError(
+          409,
+          "최신 저장본이 발행 전 QA를 통과해야 발행할 수 있어요.",
+        );
+    }
     if (!hasPublishableContent(current.content)) {
       throw new ManagementError(
         400,
@@ -265,6 +372,10 @@ export async function setPostPublication(
     published_at=CASE WHEN ?='published' THEN coalesce(published_at,max(created_at,?)) ELSE published_at END,
     revision=revision+1,updated_at=max(updated_at+1,?)
     WHERE blog_id=? AND id=? AND revision=? AND status=?
+    AND (? <> 'published' OR origin <> 'ai' OR EXISTS (
+      SELECT 1 FROM post_qa_reviews q WHERE q.blog_id=posts.blog_id AND q.post_id=posts.id
+      AND q.revision=posts.revision AND json_array_length(q.issues_json)=0
+    ))
     RETURNING status,revision,published_at AS publishedAt`,
     )
     .bind(
@@ -276,10 +387,38 @@ export async function setPostPublication(
       id,
       expectedRevision,
       current.status,
+      status,
     )
     .first();
   if (!result) throw conflict();
   return postPublicationResponseSchema.parse(result);
+}
+
+const postOverviewFields = `p.id,p.title,p.status,p.updated_at AS updatedAt,
+  coalesce(c.name,'미분류') AS category`;
+const postOverviewFrom = `FROM posts p LEFT JOIN categories c
+  ON c.blog_id=p.blog_id AND c.id=p.category_id`;
+const recentPostOrder = "ORDER BY p.updated_at DESC,p.id DESC";
+
+export async function getPostDashboard(db: Database, blogId: string) {
+  const [counts, recentPosts] = await db.batch([
+    db
+      .prepare(
+        `SELECT count(*) AS total,
+          count(CASE WHEN status='draft' THEN 1 END) AS draft,
+          count(CASE WHEN status='published' THEN 1 END) AS published,
+          count(CASE WHEN status='private' THEN 1 END) AS private
+        FROM posts WHERE blog_id=?`,
+      )
+      .bind(blogId),
+    db
+      .prepare(
+        `SELECT ${postOverviewFields} ${postOverviewFrom}
+        WHERE p.blog_id=? ${recentPostOrder} LIMIT 5`,
+      )
+      .bind(blogId),
+  ]);
+  return { counts: counts.results[0], recentPosts: recentPosts.results };
 }
 
 export async function listPosts(
@@ -313,8 +452,8 @@ export async function listPosts(
   const page = Math.min(query.page, Math.max(1, Math.ceil(total / pageSize)));
   const { results: posts } = await db
     .prepare(
-      `SELECT p.id,p.title,p.slug,p.category_id AS categoryId,coalesce(c.name,'미분류') AS category,p.status,p.origin,p.revision,p.updated_at AS updatedAt
-    FROM posts p LEFT JOIN categories c ON c.blog_id=p.blog_id AND c.id=p.category_id WHERE ${where} ORDER BY p.updated_at DESC,p.id DESC LIMIT ? OFFSET ?`,
+      `SELECT ${postOverviewFields},p.slug,p.category_id AS categoryId,p.origin,p.revision
+      ${postOverviewFrom} WHERE ${where} ${recentPostOrder} LIMIT ? OFFSET ?`,
     )
     .bind(...values, pageSize, (page - 1) * pageSize)
     .all();

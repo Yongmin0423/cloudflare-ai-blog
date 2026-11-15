@@ -15,13 +15,22 @@ import {
   readPublishedPost,
 } from "@cloudflare-ai-blog/database/public-blog";
 import { PAGE_SIZE } from "@/features/blog/content";
+import { resolveSiteOrigin } from "@/features/blog/post-seo";
 
 export async function getPublicBindings() {
   const { env } = await getCloudflareContext({ async: true });
   if (!env.DB || !env.PUBLIC_BLOG_ID?.trim()) {
     throw new Error("The public blog requires DB and PUBLIC_BLOG_ID bindings");
   }
-  return { db: env.DB, blogId: env.PUBLIC_BLOG_ID, bucket: env.BLOG_MEDIA };
+  return {
+    db: env.DB,
+    blogId: env.PUBLIC_BLOG_ID,
+    bucket: env.BLOG_MEDIA,
+    siteUrl: env.PUBLIC_SITE_URL,
+    isLocal:
+      process.env.NODE_ENV === "development" ||
+      env.NEXTJS_ENV === "development",
+  };
 }
 
 // React cache deduplicates reads in a render. connection() keeps the pages request-time.
@@ -34,6 +43,23 @@ export const getPublicBlog = cache(async () => {
   const { db, blogId } = await requestBindings();
   return readPublicBlog(db, blogId);
 });
+
+export async function getPublicSiteOrigin(domain: string | null) {
+  const { siteUrl, isLocal } = await requestBindings();
+  return resolveSiteOrigin(siteUrl, domain, isLocal);
+}
+
+export async function getPublicFeedContext() {
+  const { db, blogId, siteUrl, isLocal } = await getPublicBindings();
+  const blog = await readPublicBlog(db, blogId);
+  if (!blog) return null;
+  return {
+    db,
+    blogId,
+    blog,
+    origin: resolveSiteOrigin(siteUrl, blog.domain, isLocal),
+  };
+}
 
 export const getCategories = cache(async () => {
   const { db, blogId } = await requestBindings();

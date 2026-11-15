@@ -1,4 +1,6 @@
 export const PAGE_SIZE = 4;
+export const SITEMAP_PATH = "/sitemap.xml";
+export const RSS_PATH = "/rss.xml";
 
 export function readPage(value: string | string[] | undefined): number | null {
   if (value === undefined) return 1;
@@ -20,3 +22,10 @@ export function formatDate(value: number) {
 export const postPath = (slug: string) => `/posts/${encodeURIComponent(slug)}`;
 export const categoryPath = (slug: string) =>
   `/category/${encodeURIComponent(slug)}`;
+
+export function postLastModifiedAt(post: {
+  publishedAt: number;
+  contentUpdatedAt: number;
+}) {
+  return Math.max(post.publishedAt, post.contentUpdatedAt);
+}

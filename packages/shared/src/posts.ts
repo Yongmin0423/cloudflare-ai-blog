@@ -174,6 +174,9 @@ export const updatePostSchema = z.strictObject({
   post: postInputSchema,
   expectedRevision: z.number().int().positive(),
 });
+export const deletePostDraftSchema = z.strictObject({
+  expectedRevision: updatePostSchema.shape.expectedRevision,
+});
 export const postPublicationSchema = z.strictObject({
   status: z.enum(["published", "private"]),
   expectedRevision: z.number().int().positive(),
@@ -194,21 +197,33 @@ export const postListQuerySchema = z.strictObject({
 });
 export type PostListQuery = z.infer<typeof postListQuerySchema>;
 const detail = postDetailSchema.shape;
+const postOverviewSchema = z.object({
+  id: detail.id,
+  title: detail.title,
+  status: detail.status,
+  updatedAt: detail.updatedAt,
+  category: z.string(),
+});
+const postCountSchema = z.number().int().nonnegative();
+export const postDashboardResponseSchema = z.object({
+  counts: z.object({
+    total: postCountSchema,
+    draft: postCountSchema,
+    published: postCountSchema,
+    private: postCountSchema,
+  }),
+  recentPosts: z.array(postOverviewSchema).max(5),
+});
 export const postListResponseSchema = z.object({
   posts: z.array(
-    z.object({
-      id: detail.id,
-      title: detail.title,
+    postOverviewSchema.extend({
       slug: detail.slug,
       categoryId: detail.categoryId,
-      status: detail.status,
       origin: detail.origin,
       revision: detail.revision,
-      updatedAt: detail.updatedAt,
-      category: z.string(),
     }),
   ),
-  total: z.number().int().nonnegative(),
+  total: postCountSchema,
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
 });

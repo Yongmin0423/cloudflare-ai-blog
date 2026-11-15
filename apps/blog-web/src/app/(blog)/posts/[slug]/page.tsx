@@ -6,23 +6,41 @@ import { PostCard } from "@/components/blog/post-card";
 import { PostCover, postCoverSource } from "@/components/blog/post-cover";
 import { categoryPath, formatDate } from "@/features/blog/content";
 import {
+  buildPostSeo,
+  serializeStructuredData,
+} from "@/features/blog/post-seo";
+import {
   getPublicBlog,
+  getPublicSiteOrigin,
   getPublishedPost,
   getRelatedPosts,
 } from "@/lib/public-blog";
 
 type Props = { params: Promise<{ slug: string }> };
 
+async function loadArticle(slug: string) {
+  const [post, blog] = await Promise.all([
+    getPublishedPost(slug),
+    getPublicBlog(),
+  ]);
+  if (!blog || !post) notFound();
+  const cover = postCoverSource(post);
+  const siteOrigin = await getPublicSiteOrigin(blog.domain);
+  return {
+    post,
+    blog,
+    cover,
+    seo: buildPostSeo(post, blog, siteOrigin, cover),
+  };
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const post = await getPublishedPost((await params).slug);
-  if (!post) notFound();
-  return { title: post.title, description: post.excerpt || undefined };
+  const { seo } = await loadArticle((await params).slug);
+  return seo.metadata;
 }
 
 export default async function PostPage({ params }: Props) {
-  const [{ slug }, blog] = await Promise.all([params, getPublicBlog()]);
-  const post = await getPublishedPost(slug);
-  if (!blog || !post) notFound();
+  const { post, blog, cover, seo } = await loadArticle((await params).slug);
 
   const categoryHref = post.categorySlug
     ? categoryPath(post.categorySlug)
@@ -30,10 +48,14 @@ export default async function PostPage({ params }: Props) {
   const related = post.categoryId
     ? await getRelatedPosts(post.categoryId, post.id)
     : [];
-  const cover = postCoverSource(post);
-
   return (
     <div className="blog-container article-page">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: serializeStructuredData(seo.structuredData),
+        }}
+      />
       <div className="page-breadcrumb">
         <Link href="/" prefetch={false}>
           홈
@@ -66,6 +88,19 @@ export default async function PostPage({ params }: Props) {
             <time dateTime={new Date(post.publishedAt).toISOString()}>
               {formatDate(post.publishedAt)}
             </time>
+            {post.contentUpdatedAt > post.publishedAt && (
+              <>
+                <span>·</span>
+                <span>
+                  수정{" "}
+                  <time
+                    dateTime={new Date(post.contentUpdatedAt).toISOString()}
+                  >
+                    {formatDate(post.contentUpdatedAt)}
+                  </time>
+                </span>
+              </>
+            )}
           </p>
         </header>
         {cover && (
