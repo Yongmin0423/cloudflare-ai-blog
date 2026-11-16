@@ -1,4 +1,5 @@
 import type { JSONContent } from "@tiptap/react";
+import { managedImageId } from "@cloudflare-ai-blog/shared";
 
 export type DraftFields = {
   title: string;
@@ -102,9 +103,10 @@ function safeNode(value: unknown, depth = 0): value is JSONContent {
     return false;
   if (
     node.type === "image" &&
-    (!isWebUrl(node.attrs?.src) ||
+    ((!managedImageId(node.attrs?.src) && !isWebUrl(node.attrs?.src)) ||
       typeof node.attrs?.alt !== "string" ||
-      !node.attrs.alt.trim())
+      !node.attrs.alt.trim() ||
+      (!!managedImageId(node.attrs?.src) && node.attrs.alt.trim().length > 500))
   )
     return false;
   if (

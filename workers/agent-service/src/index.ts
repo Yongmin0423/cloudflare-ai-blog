@@ -10,12 +10,13 @@ import {
   agentDraftRequestSchema,
   agentPostQaRequestSchema,
   agentPostSeoRequestSchema,
+  managedImageSrc,
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
 import { suggestDraftSubject } from "./generate-draft";
 import { prepareDraft } from "./prepare-draft";
-import { generateCover } from "./generate-cover";
+import { generatePostImages } from "./generate-cover";
 import { reviewPost } from "./review-post";
 import { suggestPostSeo } from "./suggest-post-seo";
 
@@ -97,52 +98,82 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         settings,
         category?.name ?? null,
       );
-      const cover = await generateCover(this.env, draft);
-      const mediaId = crypto.randomUUID();
-      const key = `covers/${blogId}/${mediaId}.jpg`;
+      const images = await generatePostImages(this.env, draft);
+      const withMedia = <T extends { bytes: Uint8Array; alt: string }>(
+        image: T,
+      ) => {
+        const id = crypto.randomUUID();
+        return {
+          ...image,
+          id,
+          key: `covers/${blogId}/${id}.jpg`,
+          sizeBytes: image.bytes.byteLength,
+        };
+      };
+      const cover = withMedia(images.cover);
+      const inline = images.inline.map(withMedia);
+      const media = [cover, ...inline];
+      const inlineByHeading = new Map(
+        inline.map((image) => [image.headingIndex, image]),
+      );
+      const content = {
+        ...draft.content,
+        content: draft.content.content.flatMap((node, index) => {
+          const image = inlineByHeading.get(index);
+          return image
+            ? [
+                node,
+                {
+                  type: "image",
+                  attrs: { src: managedImageSrc(image.id), alt: image.alt },
+                },
+              ]
+            : [node];
+        }),
+      };
       const bucket = this.env.BLOG_MEDIA;
-      let keepCover = false;
+      let committed = false;
       try {
         try {
-          await bucket.put(key, cover.bytes, {
-            httpMetadata: { contentType: "image/jpeg" },
-          });
+          for (const image of media)
+            await bucket.put(image.key, image.bytes, {
+              httpMetadata: { contentType: "image/jpeg" },
+            });
         } catch {
           throw new ManagementError(
             503,
-            "대표 이미지를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
+            "게시글 이미지를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
           );
         }
 
         const saved = await retryDatabase(async () => {
           // Reuse committed work when the final read fails or the request is replayed.
           const existing = await findSavedDraft();
-          if (existing) return getPost(DB, blogId, existing.id);
-          return createPost(
+          if (existing) return existing;
+          const post = await createPost(
             DB,
             blogId,
-            { ...draft, coverMediaId: mediaId, coverAlt: cover.alt },
-            {
-              id: request.requestId,
-              origin: "ai",
-              newCoverMedia: { key, sizeBytes: cover.bytes.byteLength },
-            },
+            { ...draft, content, coverMediaId: cover.id, coverAlt: cover.alt },
+            { id: request.requestId, origin: "ai", newMedia: media },
           );
+          committed = true;
+          return post;
         });
-        keepCover = saved.coverMediaId === mediaId;
         return { draft: { id: saved.id, title: saved.title } };
       } finally {
-        if (!keepCover) {
+        if (!committed) {
           try {
-            // A failed response can follow a committed D1 batch.
+            // Media rows are inserted in one D1 batch, including the cover.
             const registered = await retryDatabase(() =>
               DB.prepare("SELECT 1 FROM media WHERE id=? AND blog_id=?")
-                .bind(mediaId, blogId)
+                .bind(cover.id, blogId)
                 .first(),
             );
-            if (!registered) await bucket.delete(key);
+            if (!registered) await bucket.delete(media.map(({ key }) => key));
           } catch {
-            console.warn("AI cover cleanup could not be verified", { key });
+            console.warn("AI image cleanup could not be verified", {
+              requestId: request.requestId,
+            });
           }
         }
       }

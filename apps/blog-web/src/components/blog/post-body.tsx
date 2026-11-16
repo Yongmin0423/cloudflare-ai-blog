@@ -1,10 +1,16 @@
 import { Fragment, type ReactNode } from "react";
-import type { EditorNode } from "@cloudflare-ai-blog/shared";
+import { managedImageId, type EditorNode } from "@cloudflare-ai-blog/shared";
 import { safeHref, safeImage } from "@/features/blog/content-safety";
 
 // Server component: render the supported editor JSON as React elements.
 // User text remains escaped; arbitrary HTML and arbitrary node attributes are never used.
-export function PostBody({ content }: { content: EditorNode }) {
+export function PostBody({
+  content,
+  postId,
+}: {
+  content: EditorNode;
+  postId: string;
+}) {
   function render(node: EditorNode, depth = 0): ReactNode {
     if (depth > 30) return null;
     const children = node.content?.map((child, index) => (
@@ -70,7 +76,10 @@ export function PostBody({ content }: { content: EditorNode }) {
       case "horizontalRule":
         return <hr />;
       case "image": {
-        const src = safeImage(node.attrs?.src);
+        const mediaId = managedImageId(node.attrs?.src);
+        const src = mediaId
+          ? `/media/${encodeURIComponent(postId)}/${encodeURIComponent(mediaId)}`
+          : safeImage(node.attrs?.src);
         const alt = typeof node.attrs?.alt === "string" ? node.attrs.alt : "";
         if (!src) return null;
         return (

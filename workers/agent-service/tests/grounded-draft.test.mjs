@@ -38,48 +38,94 @@ const { generateDraft, suggestDraftSubject } =
 const { reviewPost } = await import("../src/review-post.ts");
 const { suggestPostSeo } = await import("../src/suggest-post-seo.ts");
 const { prepareDraft } = await import("../src/prepare-draft.ts");
-const { generateCover } = await import("../src/generate-cover.ts");
+const { generatePostImages } = await import("../src/generate-cover.ts");
 
-test("AI cover uses the drafted article and rejects non-JPEG model output", async () => {
+test("AI plans distinct section images alongside the cover and rejects non-JPEG output", async () => {
   const jpeg = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9);
+  const sections = [
+    {
+      headingIndex: 0,
+      heading: "배터리",
+      body: "충전 시간과 사용 시간을 알아봅니다.",
+    },
+    {
+      headingIndex: 2,
+      heading: "스위치",
+      body: "타건감은 스위치 구성에 따라 달라집니다.",
+    },
+  ];
   const post = {
     title: "키보드 구매 안내",
     seoDescription: "구매 전 확인 사항",
+    content: {
+      type: "doc",
+      content: sections.flatMap(({ heading, body }) => [
+        { type: "heading", content: [{ type: "text", text: heading }] },
+        { type: "paragraph", content: [{ type: "text", text: body }] },
+      ]),
+    },
   };
   const brief = {
-    prompt: "A compact keyboard on a wooden desk",
-    alt: "나무 책상 위의 콤팩트 키보드",
+    cover: { prompt: "Compact keyboard on a desk", alt: "책상 위의 키보드" },
+    inline: [
+      {
+        headingIndex: 0,
+        prompt: "Keyboard connected to a charger",
+        alt: "충전 케이블을 연결한 키보드",
+      },
+      {
+        headingIndex: 2,
+        prompt: "Cross-section of a switch",
+        alt: "키보드 스위치 단면",
+      },
+    ],
   };
   let image = Buffer.from(jpeg).toString("base64");
+  let planCalls = 0;
+  const prompts = [];
   const env = {
     AI: {
       async run(model, input) {
         if (model === "@cf/black-forest-labs/flux-1-schnell") {
-          assert.equal(input.prompt, brief.prompt);
+          prompts.push(input.prompt);
           return { image };
         }
         assert.equal(input.response_format.json_schema.name, "cover_brief");
-        assert.deepEqual(JSON.parse(input.messages[1].content), {
-          title: post.title,
-          summary: post.seoDescription,
-        });
+        const context = JSON.parse(input.messages[1].content);
+        assert.equal(context.title, post.title);
+        assert.equal(context.summary, post.seoDescription);
+        assert.deepEqual(context.sections, sections);
+        planCalls++;
+        const plan =
+          planCalls === 1
+            ? { ...brief, inline: [brief.inline[0], brief.inline[0]] }
+            : brief;
         return {
           choices: [
             {
               finish_reason: "stop",
-              message: { content: JSON.stringify(brief) },
+              message: { content: JSON.stringify(plan) },
             },
           ],
         };
       },
     },
   };
-  assert.deepEqual(await generateCover(env, post), {
-    bytes: jpeg,
-    alt: brief.alt,
+  assert.deepEqual(await generatePostImages(env, post), {
+    cover: { bytes: jpeg, alt: brief.cover.alt },
+    inline: brief.inline.map(({ headingIndex, alt }) => ({
+      bytes: jpeg,
+      headingIndex,
+      alt,
+    })),
   });
+  assert.equal(planCalls, 2);
+  assert.deepEqual(
+    prompts.sort(),
+    [brief.cover, ...brief.inline].map(({ prompt }) => prompt).sort(),
+  );
   image = Buffer.from("not an image").toString("base64");
-  await assert.rejects(() => generateCover(env, post), { status: 502 });
+  await assert.rejects(() => generatePostImages(env, post), { status: 502 });
 });
 
 test("SEO uses saved post text and retries an out-of-range title", async () => {

@@ -7,6 +7,9 @@ import {
   type JSONContent,
 } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
+import { NodeSelection } from "@tiptap/pm/state";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { managedImageId } from "@cloudflare-ai-blog/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -184,7 +187,13 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const [previewContent, setPreviewContent] = useState<JSONContent | null>(
     null,
   );
-  const [insertMode, setInsertMode] = useState<"link" | "image" | null>(null);
+  const [insertMode, setInsertMode] = useState<
+    "link" | "image" | "editImage" | null
+  >(null);
+  const [imageToEdit, setImageToEdit] = useState<{
+    position: number;
+    doc: ProseMirrorNode;
+  } | null>(null);
   const [url, setUrl] = useState("");
   const [alt, setAlt] = useState("");
   const [insertError, setInsertError] = useState("");
@@ -624,14 +633,46 @@ function EditorForm({ post }: { post?: PostDetail }) {
       ]);
     }
   }
+  function updateImage(remove: boolean) {
+    if (!editor) return;
+    const target = imageToEdit;
+    if (!target || editor.state.doc !== target.doc) {
+      setInsertError("본문이 변경됐어요. 이미지를 다시 선택해 주세요.");
+      return;
+    }
+    const { position } = target;
+    const image = target.doc.nodeAt(position);
+    if (!image) return;
+    const transaction = editor.state.tr;
+    if (remove) transaction.delete(position, position + image.nodeSize);
+    else
+      transaction.setNodeMarkup(position, undefined, {
+        ...image.attrs,
+        src: url.trim(),
+        alt: alt.trim(),
+      });
+    editor.view.dispatch(transaction);
+    setInsertMode(null);
+    setInsertError("");
+    editor.commands.focus();
+  }
   function insert() {
     if (!editor) return;
-    if (!isWebUrl(url.trim())) {
+    const managed = insertMode === "editImage" && !!managedImageId(url.trim());
+    if (!managed && !isWebUrl(url.trim())) {
       setInsertError("올바른 http 또는 https 주소를 입력해 주세요.");
       return;
     }
-    if (insertMode === "image" && !alt.trim()) {
+    if (insertMode !== "link" && !alt.trim()) {
       setInsertError("이미지를 설명하는 대체 텍스트를 입력해 주세요.");
+      return;
+    }
+    if (managed && alt.trim().length > 500) {
+      setInsertError("대체 텍스트를 500자 이내로 입력해 주세요.");
+      return;
+    }
+    if (insertMode === "editImage") {
+      updateImage(false);
       return;
     }
     if (insertMode === "image")
@@ -847,9 +888,22 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 !state?.link,
               )}
               {tool("이미지", () => {
-                setInsertMode("image");
-                setUrl("");
-                setAlt("");
+                if (!editor) return;
+                const { selection, doc } = editor.state;
+                if (
+                  selection instanceof NodeSelection &&
+                  selection.node.type.name === "image"
+                ) {
+                  setImageToEdit({ position: selection.from, doc });
+                  setInsertMode("editImage");
+                  setUrl(selection.node.attrs.src ?? "");
+                  setAlt(selection.node.attrs.alt ?? "");
+                } else {
+                  setImageToEdit(null);
+                  setInsertMode("image");
+                  setUrl("");
+                  setAlt("");
+                }
                 setInsertError("");
               })}
               {tool(
@@ -887,13 +941,13 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 <label>
                   {insertMode === "link" ? "링크 URL" : "본문 이미지 URL"}
                   <input
-                    type="url"
+                    type={insertMode === "editImage" ? "text" : "url"}
                     value={url}
                     placeholder="https://"
                     onChange={(e) => setUrl(e.target.value)}
                   />
                 </label>
-                {insertMode === "image" && (
+                {insertMode !== "link" && (
                   <label>
                     본문 이미지 대체 텍스트
                     <input
@@ -918,6 +972,15 @@ function EditorForm({ post }: { post?: PostDetail }) {
                   >
                     취소
                   </button>
+                  {insertMode === "editImage" && (
+                    <button
+                      className="outline-button"
+                      type="button"
+                      onClick={() => updateImage(true)}
+                    >
+                      이미지 삭제
+                    </button>
+                  )}
                 </div>
               </div>
             )}

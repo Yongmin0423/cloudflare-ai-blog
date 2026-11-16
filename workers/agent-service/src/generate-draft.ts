@@ -129,7 +129,7 @@ const generationStageLabels = {
   article_fact_check: "사실 검증",
   post_qa: "발행 전 QA",
   post_seo: "SEO 제안",
-  cover_brief: "대표 이미지 기획",
+  cover_brief: "게시글 이미지 기획",
 };
 
 type GenerationStage = keyof typeof generationStageLabels;

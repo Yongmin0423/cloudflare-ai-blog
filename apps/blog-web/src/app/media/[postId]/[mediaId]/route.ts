@@ -1,4 +1,4 @@
-import { readPublishedCover } from "@cloudflare-ai-blog/database/public-blog";
+import { readPublishedMedia } from "@cloudflare-ai-blog/database/public-blog";
 import { coverMediaIdSchema } from "@cloudflare-ai-blog/shared";
 import { getPublicBindings } from "@/lib/public-blog";
 import { mediaNotFound, servePublicMedia } from "@/lib/public-media";
@@ -15,6 +15,6 @@ export async function GET(
     return mediaNotFound();
   }
   const { db, blogId, bucket } = await getPublicBindings();
-  const media = await readPublishedCover(db, blogId, postId, mediaId);
+  const media = await readPublishedMedia(db, blogId, postId, mediaId);
   return servePublicMedia(bucket, media);
 }

@@ -7,9 +7,10 @@ import {
   listPublishedPosts,
   listPublishedSitemapPosts,
   listPublicCategories,
-  readPublishedCover,
+  readPublishedMedia,
   readPublishedPost,
 } from "../src/public-blog.ts";
+const { managedImageSrc } = await import("../../shared/src/posts.ts");
 const { postInputSchema, postListQuerySchema } =
   await import("../../shared/src/management.ts");
 const {
@@ -270,13 +271,20 @@ test("revision conflicts preserve both post and SEO; failed category change roll
     sqlite.close();
   }
 });
-test("AI draft stores SEO and generated cover in one batch and rolls back orphaned media", async () => {
+test("AI draft links cover and inline media atomically and serves only published associations", async () => {
   const { db, sqlite } = database();
   try {
     const mediaId = crypto.randomUUID();
+    const inlineId = crypto.randomUUID();
+    const inlineKey = `covers/a/${inlineId}.jpg`;
+    const image = {
+      type: "image",
+      attrs: { src: managedImageSrc(inlineId), alt: "키보드 스위치" },
+    };
     const seoDescription = "검색 결과에 표시할 설명";
     const draftInput = {
       ...input,
+      content: { ...input.content, content: [...input.content.content, image] },
       seoTitle: "검색 결과 제목",
       seoDescription,
       coverUrl: "",
@@ -286,7 +294,10 @@ test("AI draft stores SEO and generated cover in one batch and rolls back orphan
     const key = `covers/a/${mediaId}.jpg`;
     const post = await createPost(db, "a", draftInput, {
       origin: "ai",
-      newCoverMedia: { key, sizeBytes: 42 },
+      newMedia: [
+        { id: mediaId, key, sizeBytes: 42 },
+        { id: inlineId, key: inlineKey, sizeBytes: 52 },
+      ],
     });
     assert.equal(post.coverMediaId, mediaId);
     assert.equal(post.coverAlt, draftInput.coverAlt);
@@ -297,6 +308,47 @@ test("AI draft stores SEO and generated cover in one batch and rolls back orphan
       key,
     );
 
+    assert.equal(post.content.content.at(-1).attrs.src, image.attrs.src);
+    assert.equal(await readPublishedMedia(db, "a", post.id, inlineId), null);
+    const setStatus = sqlite.prepare(
+      "UPDATE posts SET status=?,published_at=? WHERE id=?",
+    );
+    setStatus.run("published", Date.now(), post.id);
+    assert.equal(
+      (await readPublishedMedia(db, "a", post.id, inlineId)).key,
+      inlineKey,
+    );
+    assert.equal(await readPublishedMedia(db, "b", post.id, inlineId), null);
+    setStatus.run("private", Date.now(), post.id);
+
+    await assert.rejects(
+      () =>
+        updatePost(
+          db,
+          "a",
+          post.id,
+          { ...draftInput, content: input.content },
+          post.revision + 1,
+        ),
+      { status: 409 },
+    );
+    assert.equal(
+      sqlite
+        .prepare("SELECT alt FROM post_media WHERE media_id=?")
+        .get(inlineId).alt,
+      image.attrs.alt,
+    );
+    await updatePost(
+      db,
+      "a",
+      post.id,
+      { ...draftInput, content: input.content },
+      post.revision,
+    );
+    setStatus.run("published", Date.now(), post.id);
+    assert.equal(await readPublishedMedia(db, "a", post.id, inlineId), null);
+    assert.ok(await readPublishedMedia(db, "a", post.id, mediaId));
+
     const rejectedId = crypto.randomUUID();
     await assert.rejects(
       () =>
@@ -306,7 +358,13 @@ test("AI draft stores SEO and generated cover in one batch and rolls back orphan
           { ...draftInput, coverMediaId: rejectedId },
           {
             origin: "ai",
-            newCoverMedia: { key: `covers/a/${rejectedId}.jpg`, sizeBytes: 42 },
+            newMedia: [
+              {
+                id: rejectedId,
+                key: `covers/a/${rejectedId}.jpg`,
+                sizeBytes: 42,
+              },
+            ],
           },
         ),
       { status: 409 },
@@ -643,13 +701,13 @@ test("public queries expose only this blog's published posts and covers attached
     assert.equal(sitemap[0].contentUpdatedAt, detail.contentUpdatedAt);
     for (const post of [draft, hidden, otherPost]) {
       assert.equal(await readPublishedPost(db, "a", post.slug), null);
-      assert.equal(await readPublishedCover(db, "a", post.id, mediaId), null);
+      assert.equal(await readPublishedMedia(db, "a", post.id, mediaId), null);
     }
     assert.equal(
-      await readPublishedCover(db, "b", publicPost.id, mediaId),
+      await readPublishedMedia(db, "b", publicPost.id, mediaId),
       null,
     );
-    const cover = await readPublishedCover(db, "a", publicPost.id, mediaId);
+    const cover = await readPublishedMedia(db, "a", publicPost.id, mediaId);
     assert.equal(cover?.key, "cover/a");
     assert.equal(cover?.mimeType, "image/png");
   } finally {

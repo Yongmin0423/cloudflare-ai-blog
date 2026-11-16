@@ -24,6 +24,19 @@ const webUrl = (value: unknown) => {
     return false;
   }
 };
+const managedImagePrefix = "/api/admin/media/";
+
+export function managedImageSrc(mediaId: string) {
+  return managedImagePrefix + mediaId;
+}
+
+export function managedImageId(src: unknown) {
+  if (typeof src !== "string" || !src.startsWith(managedImagePrefix))
+    return null;
+  const id = coverMediaIdSchema.safeParse(src.slice(managedImagePrefix.length));
+  return id.success ? id.data : null;
+}
+
 const blocks = [
   "paragraph",
   "heading",
@@ -77,9 +90,10 @@ function validDocument(value: unknown): value is EditorDocument {
       return false;
     if (
       n.type === "image" &&
-      (!webUrl(n.attrs?.src) ||
+      ((!webUrl(n.attrs?.src) && !managedImageId(n.attrs?.src)) ||
         typeof n.attrs?.alt !== "string" ||
-        !n.attrs.alt.trim())
+        !n.attrs.alt.trim() ||
+        (managedImageId(n.attrs.src) && n.attrs.alt.trim().length > 500))
     )
       return false;
     if (

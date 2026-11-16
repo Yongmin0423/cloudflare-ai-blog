@@ -1,6 +1,7 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import {
   postInputSchema,
+  managedImageId,
   postDetailSchema,
   postPublicationResponseSchema,
   postQaReviewSchema,
@@ -74,6 +75,23 @@ async function checkCoverMedia(
       "이 블로그에 업로드된 대표 이미지를 찾을 수 없어요.",
     );
 }
+function inlineMediaJson(content: PostInput["content"]) {
+  const inline: { id: string; alt: string }[] = [];
+  function visit(node: EditorNode) {
+    if (node.type === "image") {
+      const id = managedImageId(node.attrs?.src);
+      if (id) inline.push({ id, alt: String(node.attrs?.alt).trim() });
+    }
+    node.content?.forEach(visit);
+  }
+  visit(content);
+  return JSON.stringify(inline);
+}
+
+const insertInlineMedia = `INSERT INTO post_media(post_id,media_id,blog_id,usage,alt,position)
+  SELECT ?,json_extract(value,'$.id'),?,'inline',json_extract(value,'$.alt'),CAST(key AS INTEGER)
+  FROM json_each(?)`;
+
 export async function createPost(
   db: Database,
   blogId: string,
@@ -81,34 +99,26 @@ export async function createPost(
   {
     id = crypto.randomUUID(),
     origin = "manual",
-    newCoverMedia,
+    newMedia = [],
   }: {
     id?: string;
     origin?: "manual" | "ai";
-    newCoverMedia?: { key: string; sizeBytes: number };
+    newMedia?: { id: string; key: string; sizeBytes: number }[];
   } = {},
 ) {
   const post = postInputSchema.parse(input);
   const now = Date.now();
-  const newMedia =
-    newCoverMedia && post.coverMediaId
-      ? db
+  if (!newMedia.some(({ id }) => id === post.coverMediaId))
+    await checkCoverMedia(db, blogId, post.coverMediaId);
+  try {
+    await db.batch([
+      ...newMedia.map(({ id, key, sizeBytes }) =>
+        db
           .prepare(
             "INSERT INTO media(id,blog_id,r2_key,original_name,mime_type,size_bytes) VALUES(?,?,?,?,?,?)",
           )
-          .bind(
-            post.coverMediaId,
-            blogId,
-            newCoverMedia.key,
-            "ai-cover.jpg",
-            "image/jpeg",
-            newCoverMedia.sizeBytes,
-          )
-      : null;
-  if (!newMedia) await checkCoverMedia(db, blogId, post.coverMediaId);
-  try {
-    await db.batch([
-      ...(newMedia ? [newMedia] : []),
+          .bind(id, blogId, key, "ai-image.jpg", "image/jpeg", sizeBytes),
+      ),
       db
         .prepare(
           `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,origin,created_at,updated_at,content_updated_at)
@@ -151,6 +161,9 @@ export async function createPost(
               .bind(id, post.coverMediaId, blogId, post.coverAlt),
           ]
         : []),
+      db
+        .prepare(insertInlineMedia)
+        .bind(id, blogId, inlineMediaJson(post.content)),
     ]);
   } catch (error) {
     translate(error);
@@ -194,6 +207,14 @@ export async function updatePost(
   try {
     const result = await db.batch([
       ...coverStatements,
+      db
+        .prepare(
+          `DELETE FROM post_media WHERE blog_id=? AND post_id=? AND usage='inline' AND EXISTS(${editablePost})`,
+        )
+        .bind(blogId, id, ...version),
+      db
+        .prepare(`${insertInlineMedia} WHERE EXISTS(${editablePost})`)
+        .bind(id, blogId, inlineMediaJson(post.content), ...version),
       db
         .prepare(
           `INSERT INTO post_seo(post_id,blog_id,meta_title,title_source,description,description_source,updated_at)

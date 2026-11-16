@@ -156,7 +156,7 @@ export async function listPublishedSitemapPosts(db: Database, blogId: string) {
   return results;
 }
 
-export function readPublishedCover(
+export function readPublishedMedia(
   db: Database,
   blogId: string,
   postId: string,
@@ -165,7 +165,7 @@ export function readPublishedCover(
   return db
     .prepare(
       `SELECT m.r2_key AS key,m.mime_type AS mimeType FROM posts p
-    JOIN post_media pm ON pm.blog_id=p.blog_id AND pm.post_id=p.id AND pm.usage='cover'
+    JOIN post_media pm ON pm.blog_id=p.blog_id AND pm.post_id=p.id
     JOIN media m ON m.blog_id=pm.blog_id AND m.id=pm.media_id
     WHERE ${publishedCondition} AND p.id=? AND m.id=?`,
     )
