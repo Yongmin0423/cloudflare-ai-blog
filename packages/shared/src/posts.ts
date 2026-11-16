@@ -179,8 +179,12 @@ const httpsUrl = z
   .string()
   .max(2048)
   .refine((value) => value.startsWith("https://") && webUrl(value));
+export function normalizeSourceImageUrl(url: string) {
+  return url.replace(/&(?:amp|#38|#x26);/gi, "&");
+}
+
 export const sourceImageSchema = z.object({
-  url: httpsUrl,
+  url: httpsUrl.transform(normalizeSourceImageUrl),
   pageUrl: httpsUrl,
   title: z.string().max(250),
   alt: z.string().max(500),

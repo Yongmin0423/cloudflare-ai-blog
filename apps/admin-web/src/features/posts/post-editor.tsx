@@ -190,6 +190,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const [insertMode, setInsertMode] = useState<
     "link" | "image" | "editImage" | null
   >(null);
+  const [showSourceImages, setShowSourceImages] = useState(false);
   const [imageToEdit, setImageToEdit] = useState<{
     position: number;
     doc: ProseMirrorNode;
@@ -821,6 +822,104 @@ function EditorForm({ post }: { post?: PostDetail }) {
               <h2>본문</h2>
               <span>{bodyLength}자</span>
             </div>
+            {!!post?.sourceImages.length && (
+              <details
+                className="mb-4 rounded-md border p-3"
+                onToggle={(event) =>
+                  setShowSourceImages(event.currentTarget.open)
+                }
+              >
+                <summary className="cursor-pointer font-semibold">
+                  참고 출처 이미지 ({post.sourceImages.length}장)
+                </summary>
+                <p className="mt-2 text-sm">
+                  원문에서 찾은 이미지예요. 재사용 조건을 확인한 뒤 본문에
+                  추가할 수 있어요.
+                </p>
+                {showSourceImages && (
+                  <ul className="mt-3 grid max-h-96 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 xl:grid-cols-3">
+                    {post.sourceImages.map((image) => (
+                      <li
+                        key={image.url}
+                        className="space-y-2 rounded-md border p-3 text-sm"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={image.url}
+                          alt={image.alt || image.caption || "참고 출처 이미지"}
+                          width={256}
+                          height={144}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="aspect-video w-full rounded bg-muted object-contain"
+                        />
+                        <p>
+                          {image.caption ||
+                            image.alt ||
+                            image.title ||
+                            new URL(image.pageUrl).hostname}
+                        </p>
+                        <p>{image.license ?? "재사용 조건 확인 필요"}</p>
+                        <div className="empty-actions">
+                          <a
+                            href={image.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            이미지 열기
+                          </a>
+                          <a
+                            href={image.pageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            원문 보기
+                          </a>
+                          {!isPublished && (
+                            <button
+                              type="button"
+                              className="outline-button"
+                              disabled={
+                                !editor ||
+                                saving ||
+                                deletingDraft ||
+                                changingPublication
+                              }
+                              onClick={() => {
+                                if (!editor) return;
+                                const applied = editor
+                                  .chain()
+                                  .focus()
+                                  .insertContent([
+                                    {
+                                      type: "image",
+                                      attrs: {
+                                        src: image.url,
+                                        alt:
+                                          image.alt ||
+                                          image.caption ||
+                                          "참고 출처 이미지",
+                                      },
+                                    },
+                                    sourceImageCredit(image),
+                                  ])
+                                  .run();
+                                if (applied)
+                                  setMessage(
+                                    "본문에 이미지를 추가했어요. 대체 텍스트와 위치를 확인한 뒤 저장해 주세요.",
+                                  );
+                              }}
+                            >
+                              본문에 추가
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
+            )}
             <div className="editor-toolbar" role="group" aria-label="본문 서식">
               {tool("문단", () => editor?.chain().focus().setParagraph().run())}
               {tool(
@@ -986,85 +1085,6 @@ function EditorForm({ post }: { post?: PostDetail }) {
             )}
             {!editor && <p role="status">편집기를 불러오는 중이에요.</p>}
             <EditorContent editor={editor} />
-            {!!post?.sourceImages.length && (
-              <section
-                aria-label="참고 출처 이미지"
-                className="mt-5 border-t pt-4"
-              >
-                <h2>참고 출처 이미지</h2>
-                <p>
-                  이미지를 열어 내용과 재사용 조건을 확인한 뒤 본문에 추가할 수
-                  있어요.
-                </p>
-                <ul className="mt-3 space-y-3">
-                  {post.sourceImages.map((image) => (
-                    <li key={image.url}>
-                      <p>
-                        {image.caption ||
-                          image.alt ||
-                          image.title ||
-                          new URL(image.pageUrl).hostname}
-                      </p>
-                      <p>{image.license ?? "재사용 조건 확인 필요"}</p>
-                      <div className="empty-actions">
-                        <a
-                          href={image.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          이미지 열기
-                        </a>
-                        <a
-                          href={image.pageUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          원문 보기
-                        </a>
-                        {!isPublished && (
-                          <button
-                            type="button"
-                            className="outline-button"
-                            disabled={
-                              !editor ||
-                              saving ||
-                              deletingDraft ||
-                              changingPublication
-                            }
-                            onClick={() => {
-                              if (!editor) return;
-                              const applied = editor
-                                .chain()
-                                .focus()
-                                .insertContent([
-                                  {
-                                    type: "image",
-                                    attrs: {
-                                      src: image.url,
-                                      alt:
-                                        image.alt ||
-                                        image.caption ||
-                                        "참고 출처 이미지",
-                                    },
-                                  },
-                                  sourceImageCredit(image),
-                                ])
-                                .run();
-                              if (applied)
-                                setMessage(
-                                  "본문에 이미지를 추가했어요. 대체 텍스트와 위치를 확인한 뒤 저장해 주세요.",
-                                );
-                            }}
-                          >
-                            본문에 추가
-                          </button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
             {!!state?.sources.length && (
               <section
                 aria-label="초안 참고 출처"

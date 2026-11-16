@@ -283,7 +283,7 @@ test("AI draft links cover and inline media atomically and serves only published
     };
     const sourceImages = [
       {
-        url: "https://publisher.org/images/keyboard.jpg",
+        url: "https://publisher.org/images/keyboard.jpg?w=208&amp;fm=webp",
         pageUrl: "https://publisher.org/keyboard",
         title: "키보드 자료",
         alt: "키보드",
@@ -312,7 +312,13 @@ test("AI draft links cover and inline media atomically and serves only published
       ],
     });
     assert.equal(post.coverMediaId, mediaId);
-    assert.deepEqual(post.sourceImages, sourceImages);
+    const normalizedSourceImages = [
+      {
+        ...sourceImages[0],
+        url: "https://publisher.org/images/keyboard.jpg?w=208&fm=webp",
+      },
+    ];
+    assert.deepEqual(post.sourceImages, normalizedSourceImages);
     assert.equal(post.coverAlt, draftInput.coverAlt);
     assert.equal(post.seoTitle, draftInput.seoTitle);
     assert.equal(post.seoDescription, seoDescription);
@@ -361,9 +367,15 @@ test("AI draft links cover and inline media atomically and serves only published
     setStatus.run("published", Date.now(), post.id);
     assert.equal(await readPublishedMedia(db, "a", post.id, inlineId), null);
     assert.ok(await readPublishedMedia(db, "a", post.id, mediaId));
+    // Existing drafts can contain URLs saved before HTML entity normalization.
+    sqlite
+      .prepare(
+        "UPDATE post_source_images SET candidates_json=? WHERE post_id=?",
+      )
+      .run(JSON.stringify(sourceImages), post.id);
     assert.deepEqual(
       (await getPost(db, "a", post.id)).sourceImages,
-      sourceImages,
+      normalizedSourceImages,
     );
 
     const rejectedId = crypto.randomUUID();

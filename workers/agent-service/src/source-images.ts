@@ -1,4 +1,7 @@
-import type { SourceImage } from "@cloudflare-ai-blog/shared";
+import {
+  normalizeSourceImageUrl,
+  type SourceImage,
+} from "@cloudflare-ai-blog/shared";
 
 const clean = (value: unknown, length: number) =>
   typeof value === "string"
@@ -8,7 +11,7 @@ const clean = (value: unknown, length: number) =>
 function imageUrl(value: unknown, pageUrl: string) {
   if (typeof value !== "string" || !value.trim()) return;
   try {
-    const url = new URL(value, pageUrl);
+    const url = new URL(normalizeSourceImageUrl(value), pageUrl);
     if (
       url.protocol !== "https:" ||
       url.username ||
