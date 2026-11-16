@@ -102,3 +102,4 @@ export { ZodError, type ZodType } from "zod";
 export * from "./posts";
 export * from "./ai-draft";
 export * from "./post-qa";
+export * from "./post-seo";

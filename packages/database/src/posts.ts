@@ -81,16 +81,34 @@ export async function createPost(
   {
     id = crypto.randomUUID(),
     origin = "manual",
+    newCoverMedia,
   }: {
     id?: string;
     origin?: "manual" | "ai";
+    newCoverMedia?: { key: string; sizeBytes: number };
   } = {},
 ) {
   const post = postInputSchema.parse(input);
   const now = Date.now();
-  await checkCoverMedia(db, blogId, post.coverMediaId);
+  const newMedia =
+    newCoverMedia && post.coverMediaId
+      ? db
+          .prepare(
+            "INSERT INTO media(id,blog_id,r2_key,original_name,mime_type,size_bytes) VALUES(?,?,?,?,?,?)",
+          )
+          .bind(
+            post.coverMediaId,
+            blogId,
+            newCoverMedia.key,
+            "ai-cover.jpg",
+            "image/jpeg",
+            newCoverMedia.sizeBytes,
+          )
+      : null;
+  if (!newMedia) await checkCoverMedia(db, blogId, post.coverMediaId);
   try {
     await db.batch([
+      ...(newMedia ? [newMedia] : []),
       db
         .prepare(
           `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,origin,created_at,updated_at,content_updated_at)

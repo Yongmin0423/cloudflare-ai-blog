@@ -9,7 +9,7 @@ export class ApiError extends Error {
     super(message);
   }
 }
-async function request<T>(
+export async function request<T>(
   url: string,
   schema: ZodType<T>,
   method = "GET",

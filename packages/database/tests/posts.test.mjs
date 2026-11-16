@@ -270,6 +270,56 @@ test("revision conflicts preserve both post and SEO; failed category change roll
     sqlite.close();
   }
 });
+test("AI draft stores SEO and generated cover in one batch and rolls back orphaned media", async () => {
+  const { db, sqlite } = database();
+  try {
+    const mediaId = crypto.randomUUID();
+    const seoDescription = "검색 결과에 표시할 설명";
+    const draftInput = {
+      ...input,
+      seoTitle: "검색 결과 제목",
+      seoDescription,
+      coverUrl: "",
+      coverMediaId: mediaId,
+      coverAlt: "책상 위의 키보드",
+    };
+    const key = `covers/a/${mediaId}.jpg`;
+    const post = await createPost(db, "a", draftInput, {
+      origin: "ai",
+      newCoverMedia: { key, sizeBytes: 42 },
+    });
+    assert.equal(post.coverMediaId, mediaId);
+    assert.equal(post.coverAlt, draftInput.coverAlt);
+    assert.equal(post.seoTitle, draftInput.seoTitle);
+    assert.equal(post.seoDescription, seoDescription);
+    assert.equal(
+      sqlite.prepare("SELECT r2_key FROM media WHERE id=?").get(mediaId).r2_key,
+      key,
+    );
+
+    const rejectedId = crypto.randomUUID();
+    await assert.rejects(
+      () =>
+        createPost(
+          db,
+          "a",
+          { ...draftInput, coverMediaId: rejectedId },
+          {
+            origin: "ai",
+            newCoverMedia: { key: `covers/a/${rejectedId}.jpg`, sizeBytes: 42 },
+          },
+        ),
+      { status: 409 },
+    );
+    assert.equal(
+      sqlite.prepare("SELECT 1 FROM media WHERE id=?").get(rejectedId),
+      undefined,
+    );
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("managed covers stay scoped to the blog and change only with the matching draft revision", async () => {
   const { db, sqlite } = database();
   try {

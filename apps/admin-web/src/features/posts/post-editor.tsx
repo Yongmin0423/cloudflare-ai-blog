@@ -29,6 +29,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { AiRevision } from "./ai-revision";
+import { SeoSuggestion } from "./seo-suggestion";
 import { citationLabel } from "./ai-revision-passage";
 import { createEditorExtensions } from "./editor-extensions";
 import {
@@ -1070,9 +1071,31 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 />
               </label>
               <p className="field-help">
-                {fields.seoDescription.length}/300자 · 검색 결과 반영은 발행
-                기능 연결 후 적용됩니다.
+                {fields.seoDescription.length}/300자 · 발행한 글의 메타데이터에
+                사용돼요.
               </p>
+              {post && !isPublished && (
+                <SeoSuggestion
+                  key={revision}
+                  postId={post.id}
+                  revision={revision}
+                  dirty={dirty}
+                  disabled={
+                    saving ||
+                    changingPublication ||
+                    deletingDraft ||
+                    uploadingCover ||
+                    reviewing
+                  }
+                  onApply={(suggestion) => {
+                    setFields((previous) => ({ ...previous, ...suggestion }));
+                    setDirty(true);
+                    setMessage(
+                      "SEO 제안을 적용했어요. 내용을 확인한 뒤 저장해 주세요.",
+                    );
+                  }}
+                />
+              )}
             </section>
           </aside>
         </div>

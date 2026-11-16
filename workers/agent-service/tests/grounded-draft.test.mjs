@@ -36,6 +36,115 @@ registerHooks({
 const { generateDraft, suggestDraftSubject } =
   await import("../src/generate-draft.ts");
 const { reviewPost } = await import("../src/review-post.ts");
+const { suggestPostSeo } = await import("../src/suggest-post-seo.ts");
+const { prepareDraft } = await import("../src/prepare-draft.ts");
+const { generateCover } = await import("../src/generate-cover.ts");
+
+test("AI cover uses the drafted article and rejects non-JPEG model output", async () => {
+  const jpeg = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9);
+  const post = {
+    title: "키보드 구매 안내",
+    seoDescription: "구매 전 확인 사항",
+  };
+  const brief = {
+    prompt: "A compact keyboard on a wooden desk",
+    alt: "나무 책상 위의 콤팩트 키보드",
+  };
+  let image = Buffer.from(jpeg).toString("base64");
+  const env = {
+    AI: {
+      async run(model, input) {
+        if (model === "@cf/black-forest-labs/flux-1-schnell") {
+          assert.equal(input.prompt, brief.prompt);
+          return { image };
+        }
+        assert.equal(input.response_format.json_schema.name, "cover_brief");
+        assert.deepEqual(JSON.parse(input.messages[1].content), {
+          title: post.title,
+          summary: post.seoDescription,
+        });
+        return {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: JSON.stringify(brief) },
+            },
+          ],
+        };
+      },
+    },
+  };
+  assert.deepEqual(await generateCover(env, post), {
+    bytes: jpeg,
+    alt: brief.alt,
+  });
+  image = Buffer.from("not an image").toString("base64");
+  await assert.rejects(() => generateCover(env, post), { status: 502 });
+});
+
+test("SEO uses saved post text and retries an out-of-range title", async () => {
+  const suggestion = {
+    seoTitle: "Rainy75 모델별 배터리 차이",
+    seoDescription:
+      "Rainy75 Standard와 Pro를 비교할 때 배터리 표기를 확인하는 법을 알아보세요.",
+  };
+  let calls = 0;
+  const env = {
+    AI: {
+      async run(_model, request) {
+        assert.equal(request.response_format.json_schema.name, "post_seo");
+        const input = JSON.parse(request.messages[1].content);
+        assert.equal(input.title, "Rainy75 구매 안내");
+        assert.equal(
+          input.body,
+          "Standard와 Pro의 배터리 차이를 확인하는 글입니다.",
+        );
+        calls++;
+        const output =
+          calls === 1
+            ? { ...suggestion, seoTitle: "가".repeat(101) }
+            : suggestion;
+        return {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: JSON.stringify(output) },
+            },
+          ],
+        };
+      },
+    },
+  };
+  const content = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "Standard와 Pro의 배터리 차이를 확인하는 글입니다. ",
+          },
+          {
+            type: "text",
+            text: "[1]",
+            marks: [
+              {
+                type: "link",
+                attrs: { href: "https://manufacturer.example/product" },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(
+    await suggestPostSeo(env, { title: "Rainy75 구매 안내", content }),
+    suggestion,
+  );
+  assert.equal(calls, 2);
+});
 
 test("pre-publication QA checks saved text against its citation and returns actionable issues", async (t) => {
   const originalUrl = "https://manufacturer.example/product";
@@ -761,10 +870,15 @@ test("a missing QA verdict is retried without rewriting the body", async (t) => 
   ]);
 });
 
-test("default draft writes from the keyword without a search key or a fact-check call", async (t) => {
+test("default draft prepares the article and SEO together without a web request", async (t) => {
   const fetch = t.mock.method(globalThis, "fetch", () =>
     assert.fail("Unexpected web request"),
   );
+  const seo = {
+    seoTitle: "기계식 키보드 첫 구매 가이드",
+    seoDescription:
+      "키 배열과 타건 소리를 비교해 처음 쓸 기계식 키보드를 고르는 방법을 알아보세요.",
+  };
   const stages = [];
   const env = {
     AI: {
@@ -772,6 +886,18 @@ test("default draft writes from the keyword without a search key or a fact-check
         const { name, schema } = request.response_format.json_schema;
         const input = JSON.parse(request.messages[1].content);
         stages.push(name);
+        if (name === "post_seo") {
+          assert.equal(input.title, "첫 기계식 키보드를 고르는 기준");
+          assert.match(input.body, /숫자 입력이 잦다면 별도의 숫자 키패드/);
+          return {
+            choices: [
+              {
+                finish_reason: "stop",
+                message: { content: JSON.stringify(seo) },
+              },
+            ],
+          };
+        }
         assert.ok(input.confirmedSubject);
         assert.equal(input.keyword, "기계식 키보드 고르는 법");
         assert.equal(input.additionalInstructions, "처음 구매하는 독자 대상");
@@ -841,7 +967,7 @@ test("default draft writes from the keyword without a search key or a fact-check
       },
     },
   };
-  const draft = await generateDraft(
+  const draft = await prepareDraft(
     env,
     {
       requestId: crypto.randomUUID(),
@@ -853,7 +979,9 @@ test("default draft writes from the keyword without a search key or a fact-check
     settings,
     null,
   );
-  assert.deepEqual(stages, ["article_plan", "article_draft"]);
+  assert.deepEqual(stages, ["article_plan", "article_draft", "post_seo"]);
+  assert.equal(draft.seoTitle, seo.seoTitle);
+  assert.equal(draft.seoDescription, seo.seoDescription);
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(draft.title, "첫 기계식 키보드를 고르는 기준");
   assert.equal(draft.content.content.length, 5);

@@ -9,11 +9,15 @@ import {
 import {
   agentDraftRequestSchema,
   agentPostQaRequestSchema,
+  agentPostSeoRequestSchema,
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
-import { generateDraft, suggestDraftSubject } from "./generate-draft";
+import { suggestDraftSubject } from "./generate-draft";
+import { prepareDraft } from "./prepare-draft";
+import { generateCover } from "./generate-cover";
 import { reviewPost } from "./review-post";
+import { suggestPostSeo } from "./suggest-post-seo";
 
 type Draft = { id: string; title: string };
 type DraftResult =
@@ -87,22 +91,61 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         };
 
       const { settings } = await retryDatabase(() => getSettings(DB, blogId));
-      const draft = await generateDraft(
+      const draft = await prepareDraft(
         this.env,
         { ...request, subject },
         settings,
         category?.name ?? null,
       );
-      const saved = await retryDatabase(async () => {
-        // A save can succeed before its final read fails. Look up the same ID before retrying.
-        const existing = await findSavedDraft();
-        if (existing) return existing;
-        return createPost(DB, blogId, draft, {
-          id: request.requestId,
-          origin: "ai",
+      const cover = await generateCover(this.env, draft);
+      const mediaId = crypto.randomUUID();
+      const key = `covers/${blogId}/${mediaId}.jpg`;
+      const bucket = this.env.BLOG_MEDIA;
+      let keepCover = false;
+      try {
+        try {
+          await bucket.put(key, cover.bytes, {
+            httpMetadata: { contentType: "image/jpeg" },
+          });
+        } catch {
+          throw new ManagementError(
+            503,
+            "대표 이미지를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
+          );
+        }
+
+        const saved = await retryDatabase(async () => {
+          // Reuse committed work when the final read fails or the request is replayed.
+          const existing = await findSavedDraft();
+          if (existing) return getPost(DB, blogId, existing.id);
+          return createPost(
+            DB,
+            blogId,
+            { ...draft, coverMediaId: mediaId, coverAlt: cover.alt },
+            {
+              id: request.requestId,
+              origin: "ai",
+              newCoverMedia: { key, sizeBytes: cover.bytes.byteLength },
+            },
+          );
         });
-      });
-      return { draft: { id: saved.id, title: saved.title } };
+        keepCover = saved.coverMediaId === mediaId;
+        return { draft: { id: saved.id, title: saved.title } };
+      } finally {
+        if (!keepCover) {
+          try {
+            // A failed response can follow a committed D1 batch.
+            const registered = await retryDatabase(() =>
+              DB.prepare("SELECT 1 FROM media WHERE id=? AND blog_id=?")
+                .bind(mediaId, blogId)
+                .first(),
+            );
+            if (!registered) await bucket.delete(key);
+          } catch {
+            console.warn("AI cover cleanup could not be verified", { key });
+          }
+        }
+      }
     } catch (error) {
       if (error instanceof ManagementError)
         return { error: error.message, status: error.status };
@@ -157,12 +200,44 @@ async function reviewSavedPost(request: Request, env: AgentServiceEnv) {
   }
 }
 
+async function suggestSavedPostSeo(request: Request, env: AgentServiceEnv) {
+  const parsed = agentPostSeoRequestSchema.safeParse(
+    await request.json().catch(() => null),
+  );
+  if (!parsed.success)
+    return Response.json(
+      { error: "올바른 SEO 요청이 아니에요." },
+      { status: 400 },
+    );
+
+  const { blogId, postId, expectedRevision } = parsed.data;
+  try {
+    const post = await retryDatabase(() => getPost(env.DB, blogId, postId));
+    if (post.status === "published" || post.revision !== expectedRevision)
+      throw new ManagementError(
+        409,
+        "편집할 글의 최신 저장본을 확인해 주세요.",
+      );
+
+    const suggestion = await suggestPostSeo(env, post);
+    return Response.json({ revision: post.revision, suggestion });
+  } catch (error) {
+    if (error instanceof ManagementError)
+      return Response.json({ error: error.message }, { status: error.status });
+    console.error("Post SEO suggestion failed", { postId, expectedRevision });
+    return Response.json(
+      { error: "SEO 제안을 생성하지 못했어요. 다시 시도해 주세요." },
+      { status: 503 },
+    );
+  }
+}
+
 export default {
   async fetch(request: Request, env: AgentServiceEnv) {
     const { pathname } = new URL(request.url);
     if (
       request.method !== "POST" ||
-      !["/drafts", "/post-qa"].includes(pathname)
+      !["/drafts", "/post-qa", "/post-seo"].includes(pathname)
     )
       return new Response(null, { status: 404 });
     if (
@@ -172,6 +247,7 @@ export default {
       return new Response(null, { status: 403 });
 
     if (pathname === "/post-qa") return reviewSavedPost(request, env);
+    if (pathname === "/post-seo") return suggestSavedPostSeo(request, env);
 
     const input = agentDraftRequestSchema.safeParse(
       await request.json().catch(() => null),

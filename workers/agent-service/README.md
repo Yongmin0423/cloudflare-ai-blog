@@ -20,4 +20,6 @@ ChatGPT 계정 연결에는 로컬 관리자 개발 서버의 3001번 포트와 
 
 배포 환경에서는 관리자 Worker의 `AGENT_SERVICE` 서비스 바인딩으로 호출합니다. 대상 D1과 Agent Worker를 준비한 뒤 관리자 Worker를 배포합니다. 같은 요청 ID로 재시도하면 저장된 초안을 돌려줍니다.
 
+AI 글쓰기에서 초안을 생성하면 Workers AI가 SEO 제목·설명과 대표 이미지·대체 텍스트를 함께 생성합니다. Agent Worker의 `BLOG_MEDIA`는 관리자·공개 Worker와 같은 R2 버킷을 사용합니다. 이미지에 대한 대체 텍스트는 이미지 생성 기획을 바탕으로 작성하므로 편집 화면에서 실제 이미지와 대조해 수정할 수 있습니다.
+
 모의 응답으로 전체 생성 경로를 테스트하려면 루트에서 `pnpm --filter @cloudflare-ai-blog/agent-service test`를 실행합니다.
