@@ -174,10 +174,63 @@ export const postInputSchema = z
     path: ["coverAlt"],
   });
 export type PostInput = z.infer<typeof postInputSchema>;
+
+const httpsUrl = z
+  .string()
+  .max(2048)
+  .refine((value) => value.startsWith("https://") && webUrl(value));
+export const sourceImageSchema = z.object({
+  url: httpsUrl,
+  pageUrl: httpsUrl,
+  title: z.string().max(250),
+  alt: z.string().max(500),
+  caption: z.string().max(500),
+  creator: z.string().max(250),
+  license: z.enum(["CC0 1.0", "CC BY 4.0"]).nullable(),
+});
+export const sourceImagesSchema = z.array(sourceImageSchema).max(24);
+export type SourceImage = z.infer<typeof sourceImageSchema>;
+
+const imageLicenseUrls = {
+  "CC0 1.0": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "CC BY 4.0": "https://creativecommons.org/licenses/by/4.0/",
+};
+
+function imageSourceLink(text: string, href: string): EditorNode {
+  return { type: "text", text, marks: [{ type: "link", attrs: { href } }] };
+}
+
+export function sourceImageCredit(
+  image: SourceImage,
+  isCover = false,
+): EditorNode {
+  return {
+    type: "paragraph",
+    content: [
+      {
+        type: "text",
+        text:
+          (isCover ? "대표 이미지" : "이미지") +
+          (image.caption ? ` · ${image.caption} · ` : " · "),
+      },
+      imageSourceLink(
+        image.creator || image.title || new URL(image.pageUrl).hostname,
+        image.pageUrl,
+      ),
+      ...(image.license
+        ? [
+            { type: "text", text: " · " },
+            imageSourceLink(image.license, imageLicenseUrls[image.license]),
+          ]
+        : []),
+    ],
+  };
+}
 export const postDetailSchema = postInputSchema.safeExtend({
   id: z.string().uuid(),
   status: z.enum(["draft", "published", "private"]),
   origin: z.enum(["manual", "ai"]),
+  sourceImages: sourceImagesSchema.default([]),
   revision: z.number().int().positive(),
   publishedAt: z.number().int().positive().nullable(),
   updatedAt: z.number().int().positive(),

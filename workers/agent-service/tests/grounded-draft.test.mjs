@@ -112,8 +112,9 @@ test("AI plans distinct section images alongside the cover and rejects non-JPEG 
     },
   };
   assert.deepEqual(await generatePostImages(env, post), {
-    cover: { bytes: jpeg, alt: brief.cover.alt },
+    cover: { kind: "generated", bytes: jpeg, alt: brief.cover.alt },
     inline: brief.inline.map(({ headingIndex, alt }) => ({
+      kind: "generated",
       bytes: jpeg,
       headingIndex,
       alt,
@@ -126,6 +127,117 @@ test("AI plans distinct section images alongside the cover and rejects non-JPEG 
   );
   image = Buffer.from("not an image").toString("base64");
   await assert.rejects(() => generatePostImages(env, post), { status: 502 });
+});
+
+test("licensed source images fill relevant slots before generating an illustration", async () => {
+  const { readImageMetadata } = await import("../src/source-images.ts");
+  const pageUrl = "https://manufacturer.org/product";
+  const url = "https://manufacturer.org/images/keyboard.jpg";
+  const metadata = readImageMetadata(
+    {
+      "@graph": [
+        {
+          "@type": "WebPage",
+          license: "https://creativecommons.org/licenses/by/4.0/",
+        },
+        {
+          "@type": "ImageObject",
+          contentUrl: "/images/keyboard.jpg",
+          name: "실물 키보드",
+          creditText: "Keyboard Studio",
+          license: "https://creativecommons.org/licenses/by/4.0/",
+        },
+        {
+          "@type": "ImageObject",
+          contentUrl: "/images/other.jpg",
+          name: "조건 미확인",
+          license: "https://creativecommons.org/licenses/by/4.0/",
+        },
+        {
+          "@type": "ImageObject",
+          contentUrl: "https://127.0.0.1/image.jpg",
+          name: "invalid",
+        },
+      ],
+    },
+    pageUrl,
+  );
+  assert.deepEqual([...metadata.keys()].sort(), [
+    url,
+    "https://manufacturer.org/images/other.jpg",
+  ]);
+  assert.equal(metadata.get(url).license, "CC BY 4.0");
+  assert.equal(
+    metadata.get("https://manufacturer.org/images/other.jpg").license,
+    null,
+  );
+  const source = { url, pageUrl, title: "키보드 안내", ...metadata.get(url) };
+  const unknown = {
+    ...source,
+    url: "https://manufacturer.org/images/other.jpg",
+    license: null,
+  };
+  const jpeg = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9);
+  const calls = [];
+  const env = {
+    AI: {
+      async run(model, input) {
+        if (model === "@cf/black-forest-labs/flux-1-schnell") {
+          calls.push(input.prompt);
+          return { image: Buffer.from(jpeg).toString("base64") };
+        }
+        const context = JSON.parse(input.messages[1].content);
+        assert.deepEqual(context.sourceImages, [
+          { index: 0, title: source.title, caption: "", alt: source.alt },
+        ]);
+        return {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                content: JSON.stringify({
+                  cover: {
+                    sourceImageIndex: 0,
+                    alt: "키보드",
+                    prompt: "A keyboard",
+                  },
+                  inline: [
+                    {
+                      headingIndex: 0,
+                      sourceImageIndex: null,
+                      alt: "스위치 단면",
+                      prompt: "Switch cross section",
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        };
+      },
+    },
+  };
+  const images = await generatePostImages(
+    env,
+    {
+      title: "키보드 구매 안내",
+      seoDescription: "구매 전 확인 사항",
+      content: {
+        type: "doc",
+        content: [
+          { type: "heading", content: [{ type: "text", text: "스위치" }] },
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "스위치 내부 구조를 설명합니다." }],
+          },
+        ],
+      },
+    },
+    [unknown, source],
+  );
+  assert.deepEqual(images.cover, { kind: "source", source, alt: source.alt });
+  assert.equal(images.inline[0].kind, "generated");
+  assert.deepEqual(calls, ["Switch cross section"]);
 });
 
 test("SEO uses saved post text and retries an out-of-range title", async () => {

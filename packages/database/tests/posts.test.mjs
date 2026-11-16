@@ -281,6 +281,17 @@ test("AI draft links cover and inline media atomically and serves only published
       type: "image",
       attrs: { src: managedImageSrc(inlineId), alt: "키보드 스위치" },
     };
+    const sourceImages = [
+      {
+        url: "https://publisher.org/images/keyboard.jpg",
+        pageUrl: "https://publisher.org/keyboard",
+        title: "키보드 자료",
+        alt: "키보드",
+        caption: "",
+        creator: "",
+        license: null,
+      },
+    ];
     const seoDescription = "검색 결과에 표시할 설명";
     const draftInput = {
       ...input,
@@ -294,12 +305,14 @@ test("AI draft links cover and inline media atomically and serves only published
     const key = `covers/a/${mediaId}.jpg`;
     const post = await createPost(db, "a", draftInput, {
       origin: "ai",
+      sourceImages,
       newMedia: [
         { id: mediaId, key, sizeBytes: 42 },
         { id: inlineId, key: inlineKey, sizeBytes: 52 },
       ],
     });
     assert.equal(post.coverMediaId, mediaId);
+    assert.deepEqual(post.sourceImages, sourceImages);
     assert.equal(post.coverAlt, draftInput.coverAlt);
     assert.equal(post.seoTitle, draftInput.seoTitle);
     assert.equal(post.seoDescription, seoDescription);
@@ -348,6 +361,10 @@ test("AI draft links cover and inline media atomically and serves only published
     setStatus.run("published", Date.now(), post.id);
     assert.equal(await readPublishedMedia(db, "a", post.id, inlineId), null);
     assert.ok(await readPublishedMedia(db, "a", post.id, mediaId));
+    assert.deepEqual(
+      (await getPost(db, "a", post.id)).sourceImages,
+      sourceImages,
+    );
 
     const rejectedId = crypto.randomUUID();
     await assert.rejects(

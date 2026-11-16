@@ -5,6 +5,8 @@ import {
   postDetailSchema,
   postPublicationResponseSchema,
   postQaReviewSchema,
+  sourceImagesSchema,
+  type SourceImage,
   type PostQaIssue,
   type PostInput,
   type PostListQuery,
@@ -36,18 +38,22 @@ export async function getPost(db: Database, blogId: string, id: string) {
       `SELECT p.id,p.title,p.slug,p.category_id AS categoryId,p.content_json,p.cover_url AS coverUrl,
     c.media_id AS coverMediaId,coalesce(c.alt,p.cover_alt) AS coverAlt,
     p.status,p.origin,p.revision,p.published_at AS publishedAt,p.updated_at AS updatedAt,
-    coalesce(s.meta_title,'') AS seoTitle,coalesce(s.description,'') AS seoDescription
+    coalesce(s.meta_title,'') AS seoTitle,coalesce(s.description,'') AS seoDescription,
+    i.candidates_json
     FROM posts p LEFT JOIN post_seo s ON s.blog_id=p.blog_id AND s.post_id=p.id
+    LEFT JOIN post_source_images i ON i.blog_id=p.blog_id AND i.post_id=p.id
     LEFT JOIN post_media c ON c.blog_id=p.blog_id AND c.post_id=p.id AND c.usage='cover'
     WHERE p.blog_id=? AND p.id=?`,
     )
     .bind(blogId, id)
     .first<Record<string, unknown>>();
   if (!row) throw new ManagementError(404, "게시글을 찾을 수 없어요.");
-  const { content_json, ...fields } = row;
+  const { content_json, candidates_json, ...fields } = row;
   return postDetailSchema.parse({
     ...fields,
     content: JSON.parse(String(content_json)),
+    sourceImages:
+      candidates_json == null ? [] : JSON.parse(String(candidates_json)),
   });
 }
 function excerpt(post: PostInput) {
@@ -100,10 +106,12 @@ export async function createPost(
     id = crypto.randomUUID(),
     origin = "manual",
     newMedia = [],
+    sourceImages = [],
   }: {
     id?: string;
     origin?: "manual" | "ai";
     newMedia?: { id: string; key: string; sizeBytes: number }[];
+    sourceImages?: SourceImage[];
   } = {},
 ) {
   const post = postInputSchema.parse(input);
@@ -164,6 +172,19 @@ export async function createPost(
       db
         .prepare(insertInlineMedia)
         .bind(id, blogId, inlineMediaJson(post.content)),
+      ...(sourceImages.length
+        ? [
+            db
+              .prepare(
+                "INSERT INTO post_source_images(post_id,blog_id,candidates_json) VALUES(?,?,?)",
+              )
+              .bind(
+                id,
+                blogId,
+                JSON.stringify(sourceImagesSchema.parse(sourceImages)),
+              ),
+          ]
+        : []),
     ]);
   } catch (error) {
     translate(error);

@@ -1,6 +1,11 @@
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import { fetchWeb, WebFetchError } from "agents/webfetch";
-import type { AiDraftSubject, BlogSettings } from "@cloudflare-ai-blog/shared";
+import type {
+  AiDraftSubject,
+  BlogSettings,
+  SourceImage,
+} from "@cloudflare-ai-blog/shared";
+import { collectPageImages } from "./source-images";
 import { z } from "zod";
 
 const sourceCandidatesSchema = z.array(
@@ -17,6 +22,7 @@ export type SourcePage = {
   text: string;
   provided?: true;
   requestedUrls?: string[];
+  images?: SourceImage[];
 };
 
 export function sourceUrl(value: string) {
@@ -264,15 +270,23 @@ async function readSources(
       const page = await fetchSourcePage(url, ai);
       const finalUrl = sourceUrl(page.finalUrl);
       if (!finalUrl || page.status < 200 || page.status >= 300) return null;
-      const content =
+      const isHtml =
         page.contentType === "text/html" ||
-        page.contentType === "application/xhtml+xml"
-          ? await extractHtmlText(page.content)
-          : page.content;
+        page.contentType === "application/xhtml+xml";
+      const content = isHtml
+        ? await extractHtmlText(page.content)
+        : page.content;
       const text = content.trim().slice(0, 12_000);
       if (!text) return null;
+      const pageTitle = (page.title?.trim() || title.trim()).slice(0, 250);
+      const images = isHtml
+        ? await collectPageImages(page.content, finalUrl, pageTitle).catch(
+            () => [],
+          )
+        : [];
       return {
-        title: (page.title?.trim() || title.trim()).slice(0, 250),
+        title: pageTitle,
+        ...(images.length ? { images } : {}),
         url: finalUrl,
         text,
         provided,

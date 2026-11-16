@@ -11,6 +11,8 @@ import {
   agentPostQaRequestSchema,
   agentPostSeoRequestSchema,
   managedImageSrc,
+  sourceImageCredit,
+  type SourceImage,
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
@@ -92,27 +94,54 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         };
 
       const { settings } = await retryDatabase(() => getSettings(DB, blogId));
+      const candidates = new Map<string, SourceImage>();
       const draft = await prepareDraft(
         this.env,
         { ...request, subject },
         settings,
         category?.name ?? null,
+        (pages) => {
+          for (const { images } of pages)
+            for (const image of images ?? []) {
+              const prior = candidates.get(image.url);
+              if (!prior || (!prior.license && image.license))
+                candidates.set(image.url, image);
+            }
+        },
       );
-      const images = await generatePostImages(this.env, draft);
-      const withMedia = <T extends { bytes: Uint8Array; alt: string }>(
-        image: T,
-      ) => {
+      const sourceImages = [...candidates.values()]
+        .sort((a, b) => Number(!!b.license) - Number(!!a.license))
+        .slice(0, 24);
+      const images = await generatePostImages(this.env, draft, sourceImages);
+      const media: {
+        id: string;
+        key: string;
+        sizeBytes: number;
+        bytes: Uint8Array;
+      }[] = [];
+      function prepareImage(image: typeof images.cover) {
+        if (image.kind === "source") {
+          return {
+            id: null,
+            alt: image.alt,
+            src: image.source.url,
+            source: image.source,
+          };
+        }
         const id = crypto.randomUUID();
-        return {
-          ...image,
+        media.push({
           id,
           key: `covers/${blogId}/${id}.jpg`,
           sizeBytes: image.bytes.byteLength,
-        };
-      };
-      const cover = withMedia(images.cover);
-      const inline = images.inline.map(withMedia);
-      const media = [cover, ...inline];
+          bytes: image.bytes,
+        });
+        return { id, alt: image.alt, src: managedImageSrc(id), source: null };
+      }
+      const cover = prepareImage(images.cover);
+      const inline = images.inline.map((image) => ({
+        ...prepareImage(image),
+        headingIndex: image.headingIndex,
+      }));
       const inlineByHeading = new Map(
         inline.map((image) => [image.headingIndex, image]),
       );
@@ -125,12 +154,15 @@ export class MainAgent extends Agent<AgentServiceEnv> {
                 node,
                 {
                   type: "image",
-                  attrs: { src: managedImageSrc(image.id), alt: image.alt },
+                  attrs: { src: image.src, alt: image.alt },
                 },
+                ...(image.source ? [sourceImageCredit(image.source)] : []),
               ]
             : [node];
         }),
       };
+      if (cover.source)
+        content.content.push(sourceImageCredit(cover.source, true));
       const bucket = this.env.BLOG_MEDIA;
       let committed = false;
       try {
@@ -153,20 +185,31 @@ export class MainAgent extends Agent<AgentServiceEnv> {
           const post = await createPost(
             DB,
             blogId,
-            { ...draft, content, coverMediaId: cover.id, coverAlt: cover.alt },
-            { id: request.requestId, origin: "ai", newMedia: media },
+            {
+              ...draft,
+              content,
+              coverMediaId: cover.id,
+              coverUrl: cover.source?.url ?? "",
+              coverAlt: cover.alt,
+            },
+            {
+              id: request.requestId,
+              origin: "ai",
+              newMedia: media,
+              sourceImages,
+            },
           );
           committed = true;
           return post;
         });
         return { draft: { id: saved.id, title: saved.title } };
       } finally {
-        if (!committed) {
+        if (!committed && media.length) {
           try {
-            // Media rows are inserted in one D1 batch, including the cover.
+            // All generated media rows are inserted in one D1 batch.
             const registered = await retryDatabase(() =>
               DB.prepare("SELECT 1 FROM media WHERE id=? AND blog_id=?")
-                .bind(cover.id, blogId)
+                .bind(media[0].id, blogId)
                 .first(),
             );
             if (!registered) await bucket.delete(media.map(({ key }) => key));

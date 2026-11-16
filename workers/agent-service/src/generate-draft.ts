@@ -514,6 +514,9 @@ export async function generateDraft(
   request: AgentDraftRequest & { subject: AiDraftSubject },
   settings: BlogSettings,
   category: string | null,
+  onSources?: (
+    pages: NonNullable<Awaited<ReturnType<typeof collectReferenceSources>>>,
+  ) => void,
 ) {
   const { name, description, language, topic, audience, tone, rules, avoid } =
     settings;
@@ -521,7 +524,7 @@ export async function generateDraft(
   const sourcePolicy = referenceUrls.length
     ? referenceSourcePolicy
     : automaticSourcePolicy;
-  const pages = request.chatGptTicket
+  const foundPages = request.chatGptTicket
     ? await collectChatGptSources(
         env.AI,
         request.chatGptTicket,
@@ -536,6 +539,8 @@ export async function generateDraft(
       : referenceUrls.length
         ? await collectReferenceSources(env.AI, referenceUrls)
         : null;
+  if (foundPages) onSources?.(foundPages);
+  const pages = foundPages?.map(({ images: _images, ...page }) => page) ?? null;
   const input = {
     keyword: request.keyword,
     confirmedSubject: request.subject,

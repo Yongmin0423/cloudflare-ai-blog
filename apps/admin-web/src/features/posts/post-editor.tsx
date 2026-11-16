@@ -9,7 +9,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { NodeSelection } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { managedImageId } from "@cloudflare-ai-blog/shared";
+import { managedImageId, sourceImageCredit } from "@cloudflare-ai-blog/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -986,6 +986,85 @@ function EditorForm({ post }: { post?: PostDetail }) {
             )}
             {!editor && <p role="status">편집기를 불러오는 중이에요.</p>}
             <EditorContent editor={editor} />
+            {!!post?.sourceImages.length && (
+              <section
+                aria-label="참고 출처 이미지"
+                className="mt-5 border-t pt-4"
+              >
+                <h2>참고 출처 이미지</h2>
+                <p>
+                  이미지를 열어 내용과 재사용 조건을 확인한 뒤 본문에 추가할 수
+                  있어요.
+                </p>
+                <ul className="mt-3 space-y-3">
+                  {post.sourceImages.map((image) => (
+                    <li key={image.url}>
+                      <p>
+                        {image.caption ||
+                          image.alt ||
+                          image.title ||
+                          new URL(image.pageUrl).hostname}
+                      </p>
+                      <p>{image.license ?? "재사용 조건 확인 필요"}</p>
+                      <div className="empty-actions">
+                        <a
+                          href={image.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          이미지 열기
+                        </a>
+                        <a
+                          href={image.pageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          원문 보기
+                        </a>
+                        {!isPublished && (
+                          <button
+                            type="button"
+                            className="outline-button"
+                            disabled={
+                              !editor ||
+                              saving ||
+                              deletingDraft ||
+                              changingPublication
+                            }
+                            onClick={() => {
+                              if (!editor) return;
+                              const applied = editor
+                                .chain()
+                                .focus()
+                                .insertContent([
+                                  {
+                                    type: "image",
+                                    attrs: {
+                                      src: image.url,
+                                      alt:
+                                        image.alt ||
+                                        image.caption ||
+                                        "참고 출처 이미지",
+                                    },
+                                  },
+                                  sourceImageCredit(image),
+                                ])
+                                .run();
+                              if (applied)
+                                setMessage(
+                                  "본문에 이미지를 추가했어요. 대체 텍스트와 위치를 확인한 뒤 저장해 주세요.",
+                                );
+                            }}
+                          >
+                            본문에 추가
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
             {!!state?.sources.length && (
               <section
                 aria-label="초안 참고 출처"
