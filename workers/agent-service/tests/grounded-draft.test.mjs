@@ -240,6 +240,99 @@ test("licensed source images fill relevant slots before generating an illustrati
   assert.deepEqual(calls, ["Switch cross section"]);
 });
 
+test("internal links add marks to existing text and preserve source citations", async () => {
+  const { addInternalLinks, internalLinkTerms } =
+    await import("../src/internal-links.ts");
+  const { documentSchema, postHref } =
+    await import("@cloudflare-ai-blog/shared");
+  const citation = {
+    type: "text",
+    text: "[1]",
+    marks: [
+      { type: "link", attrs: { href: "https://publisher.org/keyboard" } },
+    ],
+  };
+  const text = {
+    type: "text",
+    text: "구매 전에 키보드 스위치 차이를 확인하세요.",
+    marks: [{ type: "bold" }],
+  };
+  const content = {
+    type: "doc",
+    content: [{ type: "paragraph", content: [text, citation] }],
+  };
+  const candidates = [
+    {
+      title: "키보드 스위치 비교",
+      slug: "키보드-스위치",
+      excerpt: "스위치 유형별 특징",
+    },
+  ];
+  let calls = 0;
+  const env = {
+    AI: {
+      async run(_model, input) {
+        calls++;
+        assert.equal(input.response_format.json_schema.name, "internal_links");
+        assert.deepEqual(JSON.parse(input.messages[1].content).candidates, [
+          {
+            index: 0,
+            title: candidates[0].title,
+            excerpt: candidates[0].excerpt,
+          },
+        ]);
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  links: [
+                    { candidate: 5, paragraph: 0, anchor: "키보드 스위치" },
+                    { candidate: 0, paragraph: 0, anchor: "키보드 스위치" },
+                  ],
+                }),
+              },
+              finish_reason: "stop",
+            },
+          ],
+        };
+      },
+    },
+  };
+  assert.deepEqual(internalLinkTerms("키보드 Rainy75", "RAINY75 스위치"), [
+    "키보드",
+    "rainy75",
+    "스위치",
+  ]);
+  assert.equal(
+    await addInternalLinks(env, "키보드 선택", content, []),
+    content,
+  );
+  assert.equal(calls, 0);
+  const result = await addInternalLinks(
+    env,
+    "키보드 선택",
+    content,
+    candidates,
+  );
+  assert.equal(calls, 1);
+  assert.equal(documentSchema.safeParse(result).success, true);
+  const nodes = result.content[0].content;
+  assert.equal(
+    nodes.map(({ text }) => text).join(""),
+    text.text + citation.text,
+  );
+  assert.deepEqual(nodes[1], {
+    ...text,
+    text: "키보드 스위치",
+    marks: [
+      ...text.marks,
+      { type: "link", attrs: { href: postHref(candidates[0].slug) } },
+    ],
+  });
+  assert.equal(nodes.at(-1), citation);
+});
+
 test("SEO uses saved post text and retries an out-of-range title", async () => {
   const suggestion = {
     seoTitle: "Rainy75 모델별 배터리 차이",

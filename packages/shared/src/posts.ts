@@ -24,6 +24,30 @@ const webUrl = (value: unknown) => {
     return false;
   }
 };
+const postSlugPattern = /^[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*$/u;
+const postPathPrefix = "/posts/";
+
+export function postHref(slug: string) {
+  return postPathPrefix + encodeURIComponent(slug);
+}
+
+export function internalPostHref(value: unknown): string | null {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(postPathPrefix) ||
+    value.length > 1450
+  )
+    return null;
+  try {
+    const slug = decodeURIComponent(value.slice(postPathPrefix.length));
+    return slug.length <= 120 && postSlugPattern.test(slug)
+      ? postHref(slug)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 const managedImagePrefix = "/api/admin/media/";
 
 export function managedImageSrc(mediaId: string) {
@@ -104,7 +128,9 @@ function validDocument(value: unknown): value is EditorDocument {
           (m) =>
             m &&
             ["bold", "italic", "strike", "link"].includes(m.type) &&
-            (m.type !== "link" || webUrl(m.attrs?.href)),
+            (m.type !== "link" ||
+              webUrl(m.attrs?.href) ||
+              internalPostHref(m.attrs?.href)),
         ))
     )
       return false;
@@ -147,13 +173,7 @@ export const postInputSchema = z
     slug: z
       .string()
       .transform((v) => v.normalize("NFC").trim().toLowerCase())
-      .pipe(
-        z
-          .string()
-          .min(1)
-          .max(120)
-          .regex(/^[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*$/u),
-      ),
+      .pipe(z.string().min(1).max(120).regex(postSlugPattern)),
     categoryId: z.string().uuid().nullable(),
     content: documentSchema,
     coverUrl: z

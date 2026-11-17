@@ -12,6 +12,9 @@
       "@cloudflare-ai-blog/database": [
         "../../packages/database/src/management.ts"
       ],
+      "@cloudflare-ai-blog/database/public-blog": [
+        "../../packages/database/src/public-blog.ts"
+      ],
       "@cloudflare-ai-blog/shared": ["../../packages/shared/src/management.ts"]
     }
   },

@@ -9,7 +9,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { NodeSelection } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { managedImageId, sourceImageCredit } from "@cloudflare-ai-blog/shared";
+import {
+  internalPostHref,
+  managedImageId,
+  sourceImageCredit,
+} from "@cloudflare-ai-blog/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -107,15 +111,35 @@ function CoverImage({ fields }: { fields: DraftFields }) {
 function Preview({
   fields,
   content,
+  blogUrl,
 }: {
   fields: DraftFields;
   content: JSONContent;
+  blogUrl?: string;
 }) {
   const viewer = useEditor({
     extensions: createEditorExtensions(),
     content,
     editable: false,
     immediatelyRender: false,
+    editorProps: {
+      handleClick: (_view, _pos, event) => {
+        if (!(event.target instanceof Element) || event.button !== 0)
+          return false;
+        const href = internalPostHref(
+          event.target.closest("a")?.getAttribute("href"),
+        );
+        if (!href) return false;
+        event.preventDefault();
+        if (blogUrl && isWebUrl(blogUrl))
+          window.open(
+            new URL(href, blogUrl).href,
+            "_blank",
+            "noopener,noreferrer",
+          );
+        return true;
+      },
+    },
   });
   return (
     <article className="draft-preview">
@@ -127,10 +151,26 @@ function Preview({
   );
 }
 
-export function PostEditor({ postId }: { postId?: string }) {
-  return postId ? <ExistingPostEditor postId={postId} /> : <EditorForm />;
+export function PostEditor({
+  postId,
+  blogUrl,
+}: {
+  postId?: string;
+  blogUrl?: string;
+}) {
+  return postId ? (
+    <ExistingPostEditor postId={postId} blogUrl={blogUrl} />
+  ) : (
+    <EditorForm />
+  );
 }
-function ExistingPostEditor({ postId }: { postId: string }) {
+function ExistingPostEditor({
+  postId,
+  blogUrl,
+}: {
+  postId: string;
+  blogUrl?: string;
+}) {
   const resource = useApiResource(
     "/api/admin/posts/" + encodeURIComponent(postId),
     postResponseSchema,
@@ -145,9 +185,17 @@ function ExistingPostEditor({ postId }: { postId: string }) {
       </div>
     );
   if (!resource.data) return null;
-  return <EditorForm key={postId} post={resource.data.post} />;
+  return (
+    <EditorForm key={postId} post={resource.data.post} blogUrl={blogUrl} />
+  );
 }
-function EditorForm({ post }: { post?: PostDetail }) {
+function EditorForm({
+  post,
+  blogUrl,
+}: {
+  post?: PostDetail;
+  blogUrl?: string;
+}) {
   const router = useRouter();
   const categories = useApiResource(
     "/api/admin/categories",
@@ -660,8 +708,14 @@ function EditorForm({ post }: { post?: PostDetail }) {
   function insert() {
     if (!editor) return;
     const managed = insertMode === "editImage" && !!managedImageId(url.trim());
-    if (!managed && !isWebUrl(url.trim())) {
-      setInsertError("올바른 http 또는 https 주소를 입력해 주세요.");
+    const internal =
+      insertMode === "link" ? internalPostHref(url.trim()) : null;
+    if (!managed && !internal && !isWebUrl(url.trim())) {
+      setInsertError(
+        insertMode === "link"
+          ? "http 또는 https 주소나 /posts/로 시작하는 게시글 주소를 입력해 주세요."
+          : "올바른 http 또는 https 주소를 입력해 주세요.",
+      );
       return;
     }
     if (insertMode !== "link" && !alt.trim()) {
@@ -690,7 +744,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
         .chain()
         .focus()
         .extendMarkRange("link")
-        .setLink({ href: url.trim() })
+        .setLink({ href: internal ?? url.trim() })
         .run();
     setInsertMode(null);
     setInsertError("");
@@ -1040,7 +1094,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 <label>
                   {insertMode === "link" ? "링크 URL" : "본문 이미지 URL"}
                   <input
-                    type={insertMode === "editImage" ? "text" : "url"}
+                    type={insertMode === "image" ? "url" : "text"}
                     value={url}
                     placeholder="https://"
                     onChange={(e) => setUrl(e.target.value)}
@@ -1497,6 +1551,7 @@ function EditorForm({ post }: { post?: PostDetail }) {
                   )?.name ?? "미분류",
               }}
               content={previewContent}
+              blogUrl={blogUrl}
             />
           )}
           <Button variant="outline" onClick={() => setPreviewContent(null)}>

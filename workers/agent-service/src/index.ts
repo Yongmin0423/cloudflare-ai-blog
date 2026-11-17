@@ -16,7 +16,9 @@ import {
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
+import { findPublishedLinkCandidates } from "@cloudflare-ai-blog/database/public-blog";
 import { suggestDraftSubject } from "./generate-draft";
+import { addInternalLinks, internalLinkTerms } from "./internal-links";
 import { prepareDraft } from "./prepare-draft";
 import { generatePostImages } from "./generate-cover";
 import { reviewPost } from "./review-post";
@@ -112,7 +114,35 @@ export class MainAgent extends Agent<AgentServiceEnv> {
       const sourceImages = [...candidates.values()]
         .sort((a, b) => Number(!!b.license) - Number(!!a.license))
         .slice(0, 24);
-      const images = await generatePostImages(this.env, draft, sourceImages);
+      const [images, linkedContent] = await Promise.all([
+        generatePostImages(this.env, draft, sourceImages),
+        (async () => {
+          try {
+            const posts = await retryDatabase(() =>
+              findPublishedLinkCandidates(DB, blogId, {
+                categoryId: request.categoryId,
+                excludePostId: request.requestId,
+                terms: internalLinkTerms(
+                  subject.name,
+                  request.keyword,
+                  draft.title,
+                ),
+              }),
+            );
+            return await addInternalLinks(
+              this.env,
+              draft.title,
+              draft.content,
+              posts,
+            );
+          } catch {
+            console.warn("Internal link suggestions unavailable", {
+              requestId: request.requestId,
+            });
+            return draft.content;
+          }
+        })(),
+      ]);
       const media: {
         id: string;
         key: string;
@@ -146,8 +176,8 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         inline.map((image) => [image.headingIndex, image]),
       );
       const content = {
-        ...draft.content,
-        content: draft.content.content.flatMap((node, index) => {
+        ...linkedContent,
+        content: linkedContent.content.flatMap((node, index) => {
           const image = inlineByHeading.get(index);
           return image
             ? [

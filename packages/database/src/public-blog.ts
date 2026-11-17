@@ -124,6 +124,40 @@ export async function listPublishedPosts(
   return results;
 }
 
+export type InternalLinkCandidate = Pick<
+  PublishedPost,
+  "slug" | "title" | "excerpt"
+>;
+
+export async function findPublishedLinkCandidates(
+  db: Database,
+  blogId: string,
+  {
+    categoryId,
+    excludePostId,
+    terms,
+  }: {
+    categoryId: string | null;
+    excludePostId: string;
+    terms: string[];
+  },
+) {
+  const { results } = await db
+    .prepare(
+      `WITH terms AS (SELECT value FROM json_each(?))
+      SELECT p.slug,p.title,p.excerpt FROM posts p
+      WHERE ${publishedCondition} AND p.id<>?
+      ORDER BY (
+        SELECT coalesce(sum(CASE WHEN instr(lower(p.title), value)>0 THEN 3
+          WHEN instr(lower(p.excerpt), value)>0 THEN 1 ELSE 0 END),0) FROM terms
+      ) DESC, (p.category_id IS ?) DESC, p.published_at DESC,p.id DESC
+      LIMIT 16`,
+    )
+    .bind(JSON.stringify(terms), blogId, excludePostId, categoryId)
+    .all<InternalLinkCandidate>();
+  return results;
+}
+
 export async function readPublishedPost(
   db: Database,
   blogId: string,
