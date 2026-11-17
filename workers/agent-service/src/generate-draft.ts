@@ -128,6 +128,8 @@ const generationStageLabels = {
   article_draft: "본문 작성",
   article_fact_check: "사실 검증",
   post_qa: "발행 전 QA",
+  post_seo: "SEO 제안",
+  cover_brief: "게시글 이미지 기획",
 };
 
 type GenerationStage = keyof typeof generationStageLabels;
@@ -512,6 +514,9 @@ export async function generateDraft(
   request: AgentDraftRequest & { subject: AiDraftSubject },
   settings: BlogSettings,
   category: string | null,
+  onSources?: (
+    pages: NonNullable<Awaited<ReturnType<typeof collectReferenceSources>>>,
+  ) => void,
 ) {
   const { name, description, language, topic, audience, tone, rules, avoid } =
     settings;
@@ -519,7 +524,7 @@ export async function generateDraft(
   const sourcePolicy = referenceUrls.length
     ? referenceSourcePolicy
     : automaticSourcePolicy;
-  const pages = request.chatGptTicket
+  const foundPages = request.chatGptTicket
     ? await collectChatGptSources(
         env.AI,
         request.chatGptTicket,
@@ -534,6 +539,8 @@ export async function generateDraft(
       : referenceUrls.length
         ? await collectReferenceSources(env.AI, referenceUrls)
         : null;
+  if (foundPages) onSources?.(foundPages);
+  const pages = foundPages?.map(({ images: _images, ...page }) => page) ?? null;
   const input = {
     keyword: request.keyword,
     confirmedSubject: request.subject,

@@ -1,9 +1,12 @@
 import type { D1Database } from "@cloudflare/workers-types";
 import {
   postInputSchema,
+  managedImageId,
   postDetailSchema,
   postPublicationResponseSchema,
   postQaReviewSchema,
+  sourceImagesSchema,
+  type SourceImage,
   type PostQaIssue,
   type PostInput,
   type PostListQuery,
@@ -35,18 +38,22 @@ export async function getPost(db: Database, blogId: string, id: string) {
       `SELECT p.id,p.title,p.slug,p.category_id AS categoryId,p.content_json,p.cover_url AS coverUrl,
     c.media_id AS coverMediaId,coalesce(c.alt,p.cover_alt) AS coverAlt,
     p.status,p.origin,p.revision,p.published_at AS publishedAt,p.updated_at AS updatedAt,
-    coalesce(s.meta_title,'') AS seoTitle,coalesce(s.description,'') AS seoDescription
+    coalesce(s.meta_title,'') AS seoTitle,coalesce(s.description,'') AS seoDescription,
+    i.candidates_json
     FROM posts p LEFT JOIN post_seo s ON s.blog_id=p.blog_id AND s.post_id=p.id
+    LEFT JOIN post_source_images i ON i.blog_id=p.blog_id AND i.post_id=p.id
     LEFT JOIN post_media c ON c.blog_id=p.blog_id AND c.post_id=p.id AND c.usage='cover'
     WHERE p.blog_id=? AND p.id=?`,
     )
     .bind(blogId, id)
     .first<Record<string, unknown>>();
   if (!row) throw new ManagementError(404, "게시글을 찾을 수 없어요.");
-  const { content_json, ...fields } = row;
+  const { content_json, candidates_json, ...fields } = row;
   return postDetailSchema.parse({
     ...fields,
     content: JSON.parse(String(content_json)),
+    sourceImages:
+      candidates_json == null ? [] : JSON.parse(String(candidates_json)),
   });
 }
 function excerpt(post: PostInput) {
@@ -74,6 +81,23 @@ async function checkCoverMedia(
       "이 블로그에 업로드된 대표 이미지를 찾을 수 없어요.",
     );
 }
+function inlineMediaJson(content: PostInput["content"]) {
+  const inline: { id: string; alt: string }[] = [];
+  function visit(node: EditorNode) {
+    if (node.type === "image") {
+      const id = managedImageId(node.attrs?.src);
+      if (id) inline.push({ id, alt: String(node.attrs?.alt).trim() });
+    }
+    node.content?.forEach(visit);
+  }
+  visit(content);
+  return JSON.stringify(inline);
+}
+
+const insertInlineMedia = `INSERT INTO post_media(post_id,media_id,blog_id,usage,alt,position)
+  SELECT ?,json_extract(value,'$.id'),?,'inline',json_extract(value,'$.alt'),CAST(key AS INTEGER)
+  FROM json_each(?)`;
+
 export async function createPost(
   db: Database,
   blogId: string,
@@ -81,16 +105,28 @@ export async function createPost(
   {
     id = crypto.randomUUID(),
     origin = "manual",
+    newMedia = [],
+    sourceImages = [],
   }: {
     id?: string;
     origin?: "manual" | "ai";
+    newMedia?: { id: string; key: string; sizeBytes: number }[];
+    sourceImages?: SourceImage[];
   } = {},
 ) {
   const post = postInputSchema.parse(input);
   const now = Date.now();
-  await checkCoverMedia(db, blogId, post.coverMediaId);
+  if (!newMedia.some(({ id }) => id === post.coverMediaId))
+    await checkCoverMedia(db, blogId, post.coverMediaId);
   try {
     await db.batch([
+      ...newMedia.map(({ id, key, sizeBytes }) =>
+        db
+          .prepare(
+            "INSERT INTO media(id,blog_id,r2_key,original_name,mime_type,size_bytes) VALUES(?,?,?,?,?,?)",
+          )
+          .bind(id, blogId, key, "ai-image.jpg", "image/jpeg", sizeBytes),
+      ),
       db
         .prepare(
           `INSERT INTO posts(id,blog_id,category_id,title,slug,content_json,excerpt,cover_url,cover_alt,origin,created_at,updated_at,content_updated_at)
@@ -131,6 +167,22 @@ export async function createPost(
                 "INSERT INTO post_media(post_id,media_id,blog_id,usage,alt,position) VALUES(?,?,?,'cover',?,0)",
               )
               .bind(id, post.coverMediaId, blogId, post.coverAlt),
+          ]
+        : []),
+      db
+        .prepare(insertInlineMedia)
+        .bind(id, blogId, inlineMediaJson(post.content)),
+      ...(sourceImages.length
+        ? [
+            db
+              .prepare(
+                "INSERT INTO post_source_images(post_id,blog_id,candidates_json) VALUES(?,?,?)",
+              )
+              .bind(
+                id,
+                blogId,
+                JSON.stringify(sourceImagesSchema.parse(sourceImages)),
+              ),
           ]
         : []),
     ]);
@@ -176,6 +228,14 @@ export async function updatePost(
   try {
     const result = await db.batch([
       ...coverStatements,
+      db
+        .prepare(
+          `DELETE FROM post_media WHERE blog_id=? AND post_id=? AND usage='inline' AND EXISTS(${editablePost})`,
+        )
+        .bind(blogId, id, ...version),
+      db
+        .prepare(`${insertInlineMedia} WHERE EXISTS(${editablePost})`)
+        .bind(id, blogId, inlineMediaJson(post.content), ...version),
       db
         .prepare(
           `INSERT INTO post_seo(post_id,blog_id,meta_title,title_source,description,description_source,updated_at)

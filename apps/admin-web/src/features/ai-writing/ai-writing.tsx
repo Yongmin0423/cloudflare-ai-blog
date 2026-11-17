@@ -545,7 +545,7 @@ export function AiWriting({
           {pending && (
             <p role="status">
               {subject
-                ? "확인한 대상을 기준으로 목차와 본문을 작성하고 있어요."
+                ? "본문, SEO 제목·설명과 대표·본문 이미지를 준비하고 있어요."
                 : "키워드가 가리키는 대상을 확인하고 있어요."}
             </p>
           )}

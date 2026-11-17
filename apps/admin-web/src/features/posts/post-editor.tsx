@@ -7,6 +7,9 @@ import {
   type JSONContent,
 } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
+import { NodeSelection } from "@tiptap/pm/state";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { managedImageId, sourceImageCredit } from "@cloudflare-ai-blog/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -29,6 +32,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { AiRevision } from "./ai-revision";
+import { SeoSuggestion } from "./seo-suggestion";
 import { citationLabel } from "./ai-revision-passage";
 import { createEditorExtensions } from "./editor-extensions";
 import {
@@ -183,7 +187,14 @@ function EditorForm({ post }: { post?: PostDetail }) {
   const [previewContent, setPreviewContent] = useState<JSONContent | null>(
     null,
   );
-  const [insertMode, setInsertMode] = useState<"link" | "image" | null>(null);
+  const [insertMode, setInsertMode] = useState<
+    "link" | "image" | "editImage" | null
+  >(null);
+  const [showSourceImages, setShowSourceImages] = useState(false);
+  const [imageToEdit, setImageToEdit] = useState<{
+    position: number;
+    doc: ProseMirrorNode;
+  } | null>(null);
   const [url, setUrl] = useState("");
   const [alt, setAlt] = useState("");
   const [insertError, setInsertError] = useState("");
@@ -623,14 +634,46 @@ function EditorForm({ post }: { post?: PostDetail }) {
       ]);
     }
   }
+  function updateImage(remove: boolean) {
+    if (!editor) return;
+    const target = imageToEdit;
+    if (!target || editor.state.doc !== target.doc) {
+      setInsertError("본문이 변경됐어요. 이미지를 다시 선택해 주세요.");
+      return;
+    }
+    const { position } = target;
+    const image = target.doc.nodeAt(position);
+    if (!image) return;
+    const transaction = editor.state.tr;
+    if (remove) transaction.delete(position, position + image.nodeSize);
+    else
+      transaction.setNodeMarkup(position, undefined, {
+        ...image.attrs,
+        src: url.trim(),
+        alt: alt.trim(),
+      });
+    editor.view.dispatch(transaction);
+    setInsertMode(null);
+    setInsertError("");
+    editor.commands.focus();
+  }
   function insert() {
     if (!editor) return;
-    if (!isWebUrl(url.trim())) {
+    const managed = insertMode === "editImage" && !!managedImageId(url.trim());
+    if (!managed && !isWebUrl(url.trim())) {
       setInsertError("올바른 http 또는 https 주소를 입력해 주세요.");
       return;
     }
-    if (insertMode === "image" && !alt.trim()) {
+    if (insertMode !== "link" && !alt.trim()) {
       setInsertError("이미지를 설명하는 대체 텍스트를 입력해 주세요.");
+      return;
+    }
+    if (managed && alt.trim().length > 500) {
+      setInsertError("대체 텍스트를 500자 이내로 입력해 주세요.");
+      return;
+    }
+    if (insertMode === "editImage") {
+      updateImage(false);
       return;
     }
     if (insertMode === "image")
@@ -779,6 +822,104 @@ function EditorForm({ post }: { post?: PostDetail }) {
               <h2>본문</h2>
               <span>{bodyLength}자</span>
             </div>
+            {!!post?.sourceImages.length && (
+              <details
+                className="mb-4 rounded-md border p-3"
+                onToggle={(event) =>
+                  setShowSourceImages(event.currentTarget.open)
+                }
+              >
+                <summary className="cursor-pointer font-semibold">
+                  참고 출처 이미지 ({post.sourceImages.length}장)
+                </summary>
+                <p className="mt-2 text-sm">
+                  원문에서 찾은 이미지예요. 재사용 조건을 확인한 뒤 본문에
+                  추가할 수 있어요.
+                </p>
+                {showSourceImages && (
+                  <ul className="mt-3 grid max-h-96 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 xl:grid-cols-3">
+                    {post.sourceImages.map((image) => (
+                      <li
+                        key={image.url}
+                        className="space-y-2 rounded-md border p-3 text-sm"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={image.url}
+                          alt={image.alt || image.caption || "참고 출처 이미지"}
+                          width={256}
+                          height={144}
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          className="aspect-video w-full rounded bg-muted object-contain"
+                        />
+                        <p>
+                          {image.caption ||
+                            image.alt ||
+                            image.title ||
+                            new URL(image.pageUrl).hostname}
+                        </p>
+                        <p>{image.license ?? "재사용 조건 확인 필요"}</p>
+                        <div className="empty-actions">
+                          <a
+                            href={image.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            이미지 열기
+                          </a>
+                          <a
+                            href={image.pageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            원문 보기
+                          </a>
+                          {!isPublished && (
+                            <button
+                              type="button"
+                              className="outline-button"
+                              disabled={
+                                !editor ||
+                                saving ||
+                                deletingDraft ||
+                                changingPublication
+                              }
+                              onClick={() => {
+                                if (!editor) return;
+                                const applied = editor
+                                  .chain()
+                                  .focus()
+                                  .insertContent([
+                                    {
+                                      type: "image",
+                                      attrs: {
+                                        src: image.url,
+                                        alt:
+                                          image.alt ||
+                                          image.caption ||
+                                          "참고 출처 이미지",
+                                      },
+                                    },
+                                    sourceImageCredit(image),
+                                  ])
+                                  .run();
+                                if (applied)
+                                  setMessage(
+                                    "본문에 이미지를 추가했어요. 대체 텍스트와 위치를 확인한 뒤 저장해 주세요.",
+                                  );
+                              }}
+                            >
+                              본문에 추가
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </details>
+            )}
             <div className="editor-toolbar" role="group" aria-label="본문 서식">
               {tool("문단", () => editor?.chain().focus().setParagraph().run())}
               {tool(
@@ -846,9 +987,22 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 !state?.link,
               )}
               {tool("이미지", () => {
-                setInsertMode("image");
-                setUrl("");
-                setAlt("");
+                if (!editor) return;
+                const { selection, doc } = editor.state;
+                if (
+                  selection instanceof NodeSelection &&
+                  selection.node.type.name === "image"
+                ) {
+                  setImageToEdit({ position: selection.from, doc });
+                  setInsertMode("editImage");
+                  setUrl(selection.node.attrs.src ?? "");
+                  setAlt(selection.node.attrs.alt ?? "");
+                } else {
+                  setImageToEdit(null);
+                  setInsertMode("image");
+                  setUrl("");
+                  setAlt("");
+                }
                 setInsertError("");
               })}
               {tool(
@@ -886,13 +1040,13 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 <label>
                   {insertMode === "link" ? "링크 URL" : "본문 이미지 URL"}
                   <input
-                    type="url"
+                    type={insertMode === "editImage" ? "text" : "url"}
                     value={url}
                     placeholder="https://"
                     onChange={(e) => setUrl(e.target.value)}
                   />
                 </label>
-                {insertMode === "image" && (
+                {insertMode !== "link" && (
                   <label>
                     본문 이미지 대체 텍스트
                     <input
@@ -917,6 +1071,15 @@ function EditorForm({ post }: { post?: PostDetail }) {
                   >
                     취소
                   </button>
+                  {insertMode === "editImage" && (
+                    <button
+                      className="outline-button"
+                      type="button"
+                      onClick={() => updateImage(true)}
+                    >
+                      이미지 삭제
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1070,9 +1233,31 @@ function EditorForm({ post }: { post?: PostDetail }) {
                 />
               </label>
               <p className="field-help">
-                {fields.seoDescription.length}/300자 · 검색 결과 반영은 발행
-                기능 연결 후 적용됩니다.
+                {fields.seoDescription.length}/300자 · 발행한 글의 메타데이터에
+                사용돼요.
               </p>
+              {post && !isPublished && (
+                <SeoSuggestion
+                  key={revision}
+                  postId={post.id}
+                  revision={revision}
+                  dirty={dirty}
+                  disabled={
+                    saving ||
+                    changingPublication ||
+                    deletingDraft ||
+                    uploadingCover ||
+                    reviewing
+                  }
+                  onApply={(suggestion) => {
+                    setFields((previous) => ({ ...previous, ...suggestion }));
+                    setDirty(true);
+                    setMessage(
+                      "SEO 제안을 적용했어요. 내용을 확인한 뒤 저장해 주세요.",
+                    );
+                  }}
+                />
+              )}
             </section>
           </aside>
         </div>

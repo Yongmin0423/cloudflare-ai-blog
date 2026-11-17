@@ -112,7 +112,7 @@ export default async function PostPage({ params }: Props) {
           />
         )}
         <div className="article-body">
-          <PostBody content={post.content} />
+          <PostBody content={post.content} postId={post.id} />
           <Link
             className="back-link"
             href={categoryHref ?? "/"}

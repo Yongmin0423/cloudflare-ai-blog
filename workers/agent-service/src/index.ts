@@ -9,11 +9,18 @@ import {
 import {
   agentDraftRequestSchema,
   agentPostQaRequestSchema,
+  agentPostSeoRequestSchema,
+  managedImageSrc,
+  sourceImageCredit,
+  type SourceImage,
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
 } from "@cloudflare-ai-blog/shared";
-import { generateDraft, suggestDraftSubject } from "./generate-draft";
+import { suggestDraftSubject } from "./generate-draft";
+import { prepareDraft } from "./prepare-draft";
+import { generatePostImages } from "./generate-cover";
 import { reviewPost } from "./review-post";
+import { suggestPostSeo } from "./suggest-post-seo";
 
 type Draft = { id: string; title: string };
 type DraftResult =
@@ -87,22 +94,132 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         };
 
       const { settings } = await retryDatabase(() => getSettings(DB, blogId));
-      const draft = await generateDraft(
+      const candidates = new Map<string, SourceImage>();
+      const draft = await prepareDraft(
         this.env,
         { ...request, subject },
         settings,
         category?.name ?? null,
+        (pages) => {
+          for (const { images } of pages)
+            for (const image of images ?? []) {
+              const prior = candidates.get(image.url);
+              if (!prior || (!prior.license && image.license))
+                candidates.set(image.url, image);
+            }
+        },
       );
-      const saved = await retryDatabase(async () => {
-        // A save can succeed before its final read fails. Look up the same ID before retrying.
-        const existing = await findSavedDraft();
-        if (existing) return existing;
-        return createPost(DB, blogId, draft, {
-          id: request.requestId,
-          origin: "ai",
+      const sourceImages = [...candidates.values()]
+        .sort((a, b) => Number(!!b.license) - Number(!!a.license))
+        .slice(0, 24);
+      const images = await generatePostImages(this.env, draft, sourceImages);
+      const media: {
+        id: string;
+        key: string;
+        sizeBytes: number;
+        bytes: Uint8Array;
+      }[] = [];
+      function prepareImage(image: typeof images.cover) {
+        if (image.kind === "source") {
+          return {
+            id: null,
+            alt: image.alt,
+            src: image.source.url,
+            source: image.source,
+          };
+        }
+        const id = crypto.randomUUID();
+        media.push({
+          id,
+          key: `covers/${blogId}/${id}.jpg`,
+          sizeBytes: image.bytes.byteLength,
+          bytes: image.bytes,
         });
-      });
-      return { draft: { id: saved.id, title: saved.title } };
+        return { id, alt: image.alt, src: managedImageSrc(id), source: null };
+      }
+      const cover = prepareImage(images.cover);
+      const inline = images.inline.map((image) => ({
+        ...prepareImage(image),
+        headingIndex: image.headingIndex,
+      }));
+      const inlineByHeading = new Map(
+        inline.map((image) => [image.headingIndex, image]),
+      );
+      const content = {
+        ...draft.content,
+        content: draft.content.content.flatMap((node, index) => {
+          const image = inlineByHeading.get(index);
+          return image
+            ? [
+                node,
+                {
+                  type: "image",
+                  attrs: { src: image.src, alt: image.alt },
+                },
+                ...(image.source ? [sourceImageCredit(image.source)] : []),
+              ]
+            : [node];
+        }),
+      };
+      if (cover.source)
+        content.content.push(sourceImageCredit(cover.source, true));
+      const bucket = this.env.BLOG_MEDIA;
+      let committed = false;
+      try {
+        try {
+          for (const image of media)
+            await bucket.put(image.key, image.bytes, {
+              httpMetadata: { contentType: "image/jpeg" },
+            });
+        } catch {
+          throw new ManagementError(
+            503,
+            "게시글 이미지를 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
+          );
+        }
+
+        const saved = await retryDatabase(async () => {
+          // Reuse committed work when the final read fails or the request is replayed.
+          const existing = await findSavedDraft();
+          if (existing) return existing;
+          const post = await createPost(
+            DB,
+            blogId,
+            {
+              ...draft,
+              content,
+              coverMediaId: cover.id,
+              coverUrl: cover.source?.url ?? "",
+              coverAlt: cover.alt,
+            },
+            {
+              id: request.requestId,
+              origin: "ai",
+              newMedia: media,
+              sourceImages,
+            },
+          );
+          committed = true;
+          return post;
+        });
+        return { draft: { id: saved.id, title: saved.title } };
+      } finally {
+        if (!committed && media.length) {
+          try {
+            // All generated media rows are inserted in one D1 batch.
+            const registered = await retryDatabase(() =>
+              DB.prepare("SELECT 1 FROM media WHERE id=? AND blog_id=?")
+                .bind(media[0].id, blogId)
+                .first(),
+            );
+            if (!registered) await bucket.delete(media.map(({ key }) => key));
+          } catch {
+            console.warn("AI image cleanup could not be verified", {
+              requestId: request.requestId,
+            });
+          }
+        }
+      }
     } catch (error) {
       if (error instanceof ManagementError)
         return { error: error.message, status: error.status };
@@ -157,12 +274,44 @@ async function reviewSavedPost(request: Request, env: AgentServiceEnv) {
   }
 }
 
+async function suggestSavedPostSeo(request: Request, env: AgentServiceEnv) {
+  const parsed = agentPostSeoRequestSchema.safeParse(
+    await request.json().catch(() => null),
+  );
+  if (!parsed.success)
+    return Response.json(
+      { error: "올바른 SEO 요청이 아니에요." },
+      { status: 400 },
+    );
+
+  const { blogId, postId, expectedRevision } = parsed.data;
+  try {
+    const post = await retryDatabase(() => getPost(env.DB, blogId, postId));
+    if (post.status === "published" || post.revision !== expectedRevision)
+      throw new ManagementError(
+        409,
+        "편집할 글의 최신 저장본을 확인해 주세요.",
+      );
+
+    const suggestion = await suggestPostSeo(env, post);
+    return Response.json({ revision: post.revision, suggestion });
+  } catch (error) {
+    if (error instanceof ManagementError)
+      return Response.json({ error: error.message }, { status: error.status });
+    console.error("Post SEO suggestion failed", { postId, expectedRevision });
+    return Response.json(
+      { error: "SEO 제안을 생성하지 못했어요. 다시 시도해 주세요." },
+      { status: 503 },
+    );
+  }
+}
+
 export default {
   async fetch(request: Request, env: AgentServiceEnv) {
     const { pathname } = new URL(request.url);
     if (
       request.method !== "POST" ||
-      !["/drafts", "/post-qa"].includes(pathname)
+      !["/drafts", "/post-qa", "/post-seo"].includes(pathname)
     )
       return new Response(null, { status: 404 });
     if (
@@ -172,6 +321,7 @@ export default {
       return new Response(null, { status: 403 });
 
     if (pathname === "/post-qa") return reviewSavedPost(request, env);
+    if (pathname === "/post-seo") return suggestSavedPostSeo(request, env);
 
     const input = agentDraftRequestSchema.safeParse(
       await request.json().catch(() => null),
