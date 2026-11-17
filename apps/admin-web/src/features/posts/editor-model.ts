@@ -1,5 +1,5 @@
 import type { JSONContent } from "@tiptap/react";
-import { managedImageId } from "@cloudflare-ai-blog/shared";
+import { internalPostHref, managedImageId } from "@cloudflare-ai-blog/shared";
 
 export type DraftFields = {
   title: string;
@@ -116,7 +116,9 @@ function safeNode(value: unknown, depth = 0): value is JSONContent {
         (mark) =>
           mark &&
           ["bold", "italic", "strike", "link"].includes(mark.type) &&
-          (mark.type !== "link" || isWebUrl(mark.attrs?.href)),
+          (mark.type !== "link" ||
+            isWebUrl(mark.attrs?.href) ||
+            internalPostHref(mark.attrs?.href)),
       ))
   )
     return false;

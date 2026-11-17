@@ -10,6 +10,35 @@ const {
   validateFields,
   validateContent,
 } = await import("./editor-model.ts");
+const internalLinks = await import("@cloudflare-ai-blog/shared");
+
+test("body accepts internal post links and rejects encoded routes outside the slug", () => {
+  const { postHref } = internalLinks;
+  const content = (href) => ({
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "관련 발행 글",
+            marks: [{ type: "link", attrs: { href } }],
+          },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(validateContent(content(postHref("관련-글"))), []);
+  for (const href of [
+    "/posts/%2e%2e",
+    "/posts/%2Fexample.org",
+    "/posts/slug/edit",
+    "//outside.org/posts/slug",
+  ]) {
+    assert.equal(validateContent(content(href)).length, 1);
+  }
+});
 
 test("slug generation supports Korean and normalizes separators", () => {
   assert.equal(makeSlug("  첫 번째 글!  "), "첫-번째-글");

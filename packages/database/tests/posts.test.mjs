@@ -4,6 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import {
   countPublishedPosts,
+  findPublishedLinkCandidates,
   listPublishedPosts,
   listPublishedSitemapPosts,
   listPublicCategories,
@@ -71,6 +72,49 @@ function database() {
   };
   return { db, sqlite };
 }
+test("internal link candidates rank matching published posts from the same blog", async () => {
+  const { db, sqlite } = database();
+  try {
+    const insert = sqlite.prepare(
+      `INSERT INTO posts(id,blog_id,slug,title,excerpt,status,published_at,created_at) VALUES(?,?,?,?,?,?,?,1)`,
+    );
+    for (const row of [
+      [
+        "relevant",
+        "a",
+        "스위치-고르기",
+        "키보드 스위치 고르기",
+        "비교 가이드",
+        "published",
+        10,
+      ],
+      ["recent", "a", "recent", "최근 글", "스위치 언급", "published", 30],
+      ["private", "a", "private", "키보드 스위치", "", "private", 40],
+      ["draft", "a", "draft", "키보드 스위치", "", "draft", null],
+      ["current", "a", "current", "키보드 스위치", "", "published", 50],
+      ["other", "b", "other", "키보드 스위치", "", "published", 60],
+    ])
+      insert.run(...row);
+    const options = {
+      categoryId: null,
+      excludePostId: "current",
+      terms: ["키보드", "스위치"],
+    };
+    assert.deepEqual(
+      (await findPublishedLinkCandidates(db, "a", options)).map(
+        ({ slug }) => slug,
+      ),
+      ["스위치-고르기", "recent"],
+    );
+    assert.deepEqual(
+      await findPublishedLinkCandidates(db, "missing", options),
+      [],
+    );
+  } finally {
+    sqlite.close();
+  }
+});
+
 const input = {
   title: "저장할 글",
   slug: "saved-post",

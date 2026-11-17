@@ -130,6 +130,7 @@ const generationStageLabels = {
   post_qa: "발행 전 QA",
   post_seo: "SEO 제안",
   cover_brief: "게시글 이미지 기획",
+  internal_links: "내부 링크 제안",
 };
 
 type GenerationStage = keyof typeof generationStageLabels;
