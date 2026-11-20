@@ -338,10 +338,15 @@ export function AiWriting({
 
   return (
     <>
-      <div className="page-heading">
-        <p className="eyebrow">AI WRITING</p>
-        <h1>AI 글쓰기</h1>
-        <p>키워드로 글 초안을 만들고 편집기에서 다듬을 수 있어요.</p>
+      <div className="posts-heading">
+        <div className="page-heading">
+          <p className="eyebrow">AI WRITING</p>
+          <h1>AI 글쓰기</h1>
+          <p>키워드로 글 초안을 만들고 편집기에서 다듬을 수 있어요.</p>
+        </div>
+        <Link className="outline-button" href="/ai-writing/logs">
+          생성 로그
+        </Link>
       </div>
       {categories.error && (
         <p className="editor-errors" role="alert">

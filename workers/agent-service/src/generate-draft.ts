@@ -7,6 +7,7 @@ import {
   type AiDraftRequest,
   type AiDraftSubject,
   type BlogSettings,
+  type RecordDraftDiagnostic,
 } from "@cloudflare-ai-blog/shared";
 import { z } from "zod";
 import {
@@ -546,10 +547,36 @@ export async function generateDraft(
   onSources?: (
     pages: NonNullable<Awaited<ReturnType<typeof collectReferenceSources>>>,
   ) => void,
+  record?: RecordDraftDiagnostic,
 ) {
   const { name, description, language, topic, audience, tone, rules, avoid } =
     settings;
   const referenceUrls = request.referenceUrls ?? [];
+  const model = request.chatGptTicket
+    ? "ChatGPT 구독 (로컬)"
+    : (request.bodyModel ?? writingModel);
+  await record?.({
+    stage: "start",
+    message: `제목·본문 모델: ${model}`,
+    details: [
+      `확인한 대상: ${request.subject.name} (${request.subject.type})`,
+      `목차·검증 모델: ${writingModel}`,
+    ],
+  });
+  const sourceMode = request.chatGptTicket
+    ? "ChatGPT 웹 검색"
+    : env.AI_DRAFT_SOURCE_CHECK === "true"
+      ? "Ceramic.ai 웹 검색"
+      : referenceUrls.length
+        ? "참고 URL만 사용 (웹 검색 안 함)"
+        : "웹 검색과 참고 URL 없이 작성";
+  await record?.({
+    stage: "source",
+    message: sourceMode,
+    links: diagnosticLinks(
+      referenceUrls.map((url) => ({ url, title: "입력한 참고 URL" })),
+    ),
+  });
   const sourcePolicy = referenceUrls.length
     ? referenceSourcePolicy
     : automaticSourcePolicy;
@@ -564,11 +591,23 @@ export async function generateDraft(
         referenceUrls,
       )
     : env.AI_DRAFT_SOURCE_CHECK === "true"
-      ? await collectSources(env, request.subject.name, language, referenceUrls)
+      ? await collectSources(
+          env,
+          request.subject.name,
+          language,
+          referenceUrls,
+          record,
+        )
       : referenceUrls.length
         ? await collectReferenceSources(env.AI, referenceUrls)
         : null;
   if (foundPages) onSources?.(foundPages);
+  if (foundPages)
+    await record?.({
+      stage: "source",
+      message: `읽은 원문 ${foundPages.length}개`,
+      links: diagnosticLinks(foundPages),
+    });
   const pages = foundPages?.map(({ images: _images, ...page }) => page) ?? null;
   const input = {
     keyword: request.keyword,
@@ -608,6 +647,16 @@ export async function generateDraft(
     key: `section_${index + 1}`,
     ...section,
   }));
+  await record?.({
+    stage: "outline",
+    message: plan.searchIntent,
+    details: [
+      `원문에서 확인한 근거 ${evidence.size}개`,
+      ...outline.map(({ heading, answerBrief }) =>
+        `${heading} — ${answerBrief}`.slice(0, 600),
+      ),
+    ],
+  });
   const evidenceIdList = z.array(z.string().min(1).max(30));
   const evidenceIdsSchema = pages
     ? evidenceIdList.min(1).max(4)
@@ -643,7 +692,7 @@ export async function generateDraft(
     revised: boolean,
   ): Promise<EditorialIssue | undefined> {
     if (!pages) return;
-    const blocks = {
+    const blocks: Record<string, { text: string; evidenceIds?: string[] }> = {
       title: { text: article.title },
       ...(article.introduction.text
         ? { introduction: article.introduction }
@@ -691,6 +740,25 @@ export async function generateDraft(
         feedback,
       ),
     );
+    const flagged = Object.entries(verdicts.claims).filter(
+      ([, verdict]) => verdict !== "supported",
+    );
+    const gaps = outline.filter(
+      ({ key }) => verdicts.sections[key] !== "answered",
+    );
+    await record?.({
+      stage: "check",
+      message: `원문 대조 · 근거 부족 또는 충돌 ${flagged.length}개`,
+      details: [
+        ...flagged.map(([key, verdict]) =>
+          `${verdict === "conflict" ? "출처 충돌" : "근거 부족"}: ${blocks[key]?.text ?? key}`.slice(
+            0,
+            600,
+          ),
+        ),
+        ...gaps.map(({ heading }) => `답변 보완 필요: ${heading}`),
+      ].slice(0, 12),
+    });
     const unanswered = outline.filter(
       ({ key }) => verdicts.sections[key] === "missing_answer",
     );
@@ -732,6 +800,13 @@ export async function generateDraft(
 
   const article = await generateWithEditorialCheck(
     async (feedback) => {
+      await record?.({
+        stage: "body",
+        message: feedback
+          ? "검증 결과를 반영해 본문 다시 작성"
+          : "제목·본문 작성",
+        details: feedback ? [feedback.slice(0, 600)] : undefined,
+      });
       const draft = await generate(
         env,
         articleSchema,
@@ -758,6 +833,12 @@ export async function generateDraft(
       checkGroundedArticle(draft, revised),
     "AI가 소제목에 답하는 본문을 완성하지 못했어요. 주제나 추가 작성 지시를 구체화해 다시 생성해 주세요.",
   );
+  if (!pages)
+    await record?.({
+      stage: "check",
+      message:
+        "글 구조 검사를 통과했어요. 원문이 없어 사실 대조는 실행하지 않았어요.",
+    });
 
   const sourceNumbers = new Map(
     pages?.map(({ url }, index) => [url, index + 1]),
@@ -793,5 +874,14 @@ export async function generateDraft(
         ]),
       ],
     },
+  });
+}
+
+function diagnosticLinks(sources: { title: string; url: string }[]) {
+  return sources.slice(0, 12).map(({ title, url }) => {
+    const page = new URL(url);
+    page.search = "";
+    page.hash = "";
+    return { title: title.slice(0, 200), url: page.href };
   });
 }

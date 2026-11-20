@@ -12,6 +12,14 @@ import {
 // Imported only by server adapters. Runtime types are explicit package dependencies.
 type Database = Pick<D1Database, "prepare" | "batch">;
 export {
+  appendAiDraftDiagnostic,
+  finishAiDraftJob,
+  getAiDraftDashboard,
+  getAiDraftDiagnostics,
+  listAiDraftJobs,
+  startAiDraftJob,
+} from "./ai-draft-jobs";
+export {
   getPost,
   createPost,
   updatePost,

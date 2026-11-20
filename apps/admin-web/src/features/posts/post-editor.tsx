@@ -794,9 +794,19 @@ function EditorForm({
                 : "생각을 글로 옮기고, 발행 전 모습을 확인하세요."}
           </p>
         </div>
-        <Link className="outline-button" href="/posts">
-          목록으로
-        </Link>
+        <div className="dashboard-actions">
+          {post?.origin === "ai" && (
+            <Link
+              className="outline-button"
+              href={`/ai-writing/logs?requestId=${post.id}`}
+            >
+              생성 로그
+            </Link>
+          )}
+          <Link className="outline-button" href="/posts">
+            목록으로
+          </Link>
+        </div>
       </div>
       <div className="demo-notice">
         <p>

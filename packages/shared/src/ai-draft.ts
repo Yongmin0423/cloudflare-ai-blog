@@ -83,6 +83,28 @@ export const aiDraftProvidersResponseSchema = z.strictObject({
     .max(2),
 });
 
+export const aiDraftDiagnosticEventSchema = z.strictObject({
+  at: z.number().int().positive(),
+  stage: z.enum(["start", "source", "outline", "body", "check", "save"]),
+  message: z.string().min(1).max(500),
+  details: z.array(z.string().max(600)).max(12).optional(),
+  links: z
+    .array(
+      z.strictObject({
+        title: z.string().max(200),
+        url: z.url({ protocol: /^https$/ }).max(2048),
+      }),
+    )
+    .max(12)
+    .optional(),
+});
+export type AiDraftDiagnosticEvent = z.infer<
+  typeof aiDraftDiagnosticEventSchema
+>;
+export type RecordDraftDiagnostic = (
+  event: Omit<AiDraftDiagnosticEvent, "at">,
+) => Promise<void>;
+
 export const aiDraftRequestSchema = z.strictObject({
   requestId: z.string().uuid(),
   keyword: z.string().trim().min(1, "키워드를 입력해 주세요.").max(100),

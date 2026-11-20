@@ -24,6 +24,12 @@ const {
   savePostQaReview,
   listPosts,
   getPostDashboard,
+  finishAiDraftJob,
+  getAiDraftDashboard,
+  appendAiDraftDiagnostic,
+  getAiDraftDiagnostics,
+  listAiDraftJobs,
+  startAiDraftJob,
   createCategory,
 } = await import("../src/management.ts");
 function database() {
@@ -130,6 +136,77 @@ const input = {
   seoTitle: "검색 제목",
   seoDescription: "검색 설명",
 };
+test("AI dashboard counts real drafts and transitions without duplicate or cross-blog jobs", async () => {
+  const { db, sqlite } = database();
+  try {
+    const id = crypto.randomUUID();
+    const anotherJob = crypto.randomUUID();
+    const counts = async () => (await getAiDraftDashboard(db, "a")).counts;
+    assert.deepEqual(await counts(), { running: 0, review: 0, failed: 0 });
+    await startAiDraftJob(db, "a", id, "생성할 글");
+    await startAiDraftJob(db, "b", anotherJob, "다른 블로그");
+    assert.deepEqual(await counts(), { running: 1, review: 0, failed: 0 });
+    await finishAiDraftJob(db, "a", id, "failed");
+    assert.deepEqual(await counts(), { running: 0, review: 0, failed: 1 });
+
+    await startAiDraftJob(db, "a", id, "생성 재시도");
+    sqlite
+      .prepare("UPDATE ai_draft_jobs SET updated_at=0 WHERE blog_id='a'")
+      .run();
+    assert.equal(
+      (await getAiDraftDashboard(db, "a")).recent[0].status,
+      "unconfirmed",
+    );
+    await createPost(db, "a", input, { id, origin: "ai" });
+    assert.deepEqual(await counts(), { running: 0, review: 1, failed: 0 });
+    await finishAiDraftJob(db, "a", id, "succeeded");
+    await deletePostDraft(db, "a", id, 1);
+    assert.deepEqual(await counts(), { running: 0, review: 0, failed: 0 });
+
+    for (let i = 0; i < 4; i++) {
+      await createPost(
+        db,
+        "a",
+        { ...input, slug: `old-ai-draft-${i}` },
+        { origin: "ai" },
+      );
+    }
+    await createPost(db, "a", input);
+    const snapshot = await getAiDraftDashboard(db, "a");
+    assert.deepEqual(snapshot.counts, { running: 0, review: 4, failed: 0 });
+    assert.equal(snapshot.recent.length, 3);
+    assert.ok(snapshot.recent.every((job) => job.status === "review"));
+  } finally {
+    sqlite.close();
+  }
+});
+test("AI job diagnostics preserve recent events and isolate blogs", async () => {
+  const { db, sqlite } = database();
+  const id = crypto.randomUUID();
+  try {
+    await startAiDraftJob(db, "a", id, "맥북");
+    assert.deepEqual((await getAiDraftDiagnostics(db, "a", id)).events, []);
+    for (let at = 1; at <= 26; at++) {
+      await appendAiDraftDiagnostic(db, "a", id, {
+        at,
+        stage: "source",
+        message: `출처 확인 ${at}`,
+      });
+    }
+    await finishAiDraftJob(db, "a", id, "failed");
+    await startAiDraftJob(db, "a", id, "맥북");
+    const job = await getAiDraftDiagnostics(db, "a", id);
+    assert.deepEqual(
+      [job.events.length, job.events[0].at, job.events.at(-1).at],
+      [24, 3, 26],
+    );
+    assert.equal((await listAiDraftJobs(db, "a")).length, 1);
+    assert.equal(await getAiDraftDiagnostics(db, "b", id), null);
+    assert.deepEqual(await listAiDraftJobs(db, "b"), []);
+  } finally {
+    sqlite.close();
+  }
+});
 test("post contracts reject status/ownership injection, unsafe links and malformed/deep/oversized content", () => {
   assert.equal(
     postInputSchema.safeParse({ ...input, status: "published" }).success,

@@ -296,6 +296,13 @@ const postOverviewSchema = z.object({
   category: z.string(),
 });
 const postCountSchema = z.number().int().nonnegative();
+const aiJobStatusSchema = z.enum([
+  "running",
+  "review",
+  "failed",
+  "unconfirmed",
+]);
+export type AiJobStatus = z.infer<typeof aiJobStatusSchema>;
 export const postDashboardResponseSchema = z.object({
   counts: z.object({
     total: postCountSchema,
@@ -304,6 +311,22 @@ export const postDashboardResponseSchema = z.object({
     private: postCountSchema,
   }),
   recentPosts: z.array(postOverviewSchema).max(5),
+  aiJobs: z.object({
+    counts: z.object({
+      running: postCountSchema,
+      review: postCountSchema,
+      failed: postCountSchema,
+    }),
+    recent: z
+      .array(
+        z.object({
+          id: detail.id,
+          title: detail.title,
+          status: aiJobStatusSchema,
+        }),
+      )
+      .max(3),
+  }),
 });
 export const postListResponseSchema = z.object({
   posts: z.array(
