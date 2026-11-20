@@ -793,6 +793,7 @@ function scenario(
       },
     },
   };
+  const diagnostics = [];
   const result = generateDraft(
     env,
     {
@@ -806,14 +807,34 @@ function scenario(
     },
     settings,
     null,
+    undefined,
+    async (event) => {
+      diagnostics.push(event);
+    },
   );
-  return { result, stages, fetch, searches };
+  return { result, stages, fetch, searches, diagnostics };
 }
 
 for (const fixture of [film, keyboard]) {
   test(`${fixture.keyword} links original sources in the same order as the body`, async (t) => {
-    const { result, stages, fetch } = scenario(t, fixture);
+    const { result, stages, fetch, diagnostics } = scenario(t, fixture);
     const draft = await result;
+    assert.deepEqual(
+      diagnostics.find(({ message }) => message === "Ceramic.ai 검색 요청")
+        .details,
+      [JSON.parse(fetch.mock.calls[0].arguments[1].body).query],
+    );
+    assert.ok(
+      diagnostics.some(
+        ({ stage, links }) => stage === "source" && links?.length,
+      ),
+    );
+    assert.ok(diagnostics.some(({ stage }) => stage === "outline"));
+    assert.ok(
+      diagnostics.some(
+        ({ stage, message }) => stage === "check" && message.includes("0개"),
+      ),
+    );
     assert.deepEqual(stages, [
       "article_plan",
       "article_draft",
@@ -1265,6 +1286,7 @@ test("selected API writes the article while Workers AI handles outline and SEO",
     const provider = bodyModel?.startsWith("gpt-")
       ? "openai"
       : bodyModel && "anthropic";
+    const diagnostics = [];
     const before = fetch.mock.callCount();
     stages.length = 0;
     const draft = await prepareDraft(
@@ -1279,6 +1301,31 @@ test("selected API writes the article while Workers AI handles outline and SEO",
       },
       settings,
       null,
+      undefined,
+      async (event) => {
+        diagnostics.push(event);
+      },
+    );
+    if (bodyModel) {
+      assert.ok(
+        diagnostics.some(
+          ({ stage, message }) =>
+            stage === "start" && message === `제목·본문 모델: ${bodyModel}`,
+        ),
+      );
+    }
+    assert.ok(
+      diagnostics.some(
+        ({ stage, message }) =>
+          stage === "source" && message === "웹 검색과 참고 URL 없이 작성",
+      ),
+    );
+    assert.ok(
+      diagnostics.some(
+        ({ stage, message }) =>
+          stage === "check" &&
+          message.includes("사실 대조는 실행하지 않았어요"),
+      ),
     );
     assert.deepEqual(stages, [
       "article_plan",

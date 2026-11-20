@@ -21,6 +21,12 @@ node scripts/run-tool.mjs wrangler secret put ANTHROPIC_API_KEY --config workers
 
 로컬에서 테스트하려면 사용할 키를 Git에서 제외된 `workers/agent-service/.dev.vars`에 넣고 Agent를 재시작합니다. 관리자를 새로고침해 모델을 선택한 뒤 **대상 확인 → 이 대상으로 초안 생성**으로 확인합니다. 모델 호출이 실패하면 오류를 표시하고 다른 모델로 자동 전환하지 않습니다.
 
+### 생성 로그
+
+**AI 글쓰기 → 생성 로그** 또는 AI 초안 편집기의 **생성 로그**에서 사용 모델, 검색 방식, 읽은 원문, 목차와 핵심 답변, 원문 대조, 저장 결과를 확인합니다. 원문을 확보하지 않아 사실 대조를 생략한 경우도 기록합니다. 로그의 URL에는 쿼리와 프래그먼트를 저장하지 않습니다.
+
+최근 작업 25개를 목록에 표시하며 요청 ID당 최근 이벤트 24개를 보관합니다. 이전 작업에는 상세 로그가 없을 수 있습니다. 앱과 Agent 배포 전에 해당 D1에 `0008_ai_draft_diagnostics.sql`을 적용합니다.
+
 ### 출처 기반 생성 설정
 
 별도 검색과 사실 검증을 테스트할 때는 Agent Worker에 `AI_DRAFT_SOURCE_CHECK="true"`와 `CERAMIC_API_KEY`를 함께 설정합니다. 로컬에서는 `workers/agent-service/.dev.vars`를 사용합니다. Worker가 Ceramic.ai에서 찾은 페이지를 읽고, 원문 인용과 초안을 대조하는 별도 모델 호출을 수행합니다. 검사에 통과한 초안에는 원문 링크가 포함됩니다. [Ceramic.ai 검색 API](https://docs.ceramic.ai/api-reference/search)

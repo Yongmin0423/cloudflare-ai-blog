@@ -3,6 +3,7 @@ import { fetchWeb, WebFetchError } from "agents/webfetch";
 import type {
   AiDraftSubject,
   BlogSettings,
+  RecordDraftDiagnostic,
   SourceImage,
 } from "@cloudflare-ai-blog/shared";
 import { collectPageImages } from "./source-images";
@@ -50,6 +51,7 @@ export async function collectSources(
   keyword: string,
   language: string,
   referenceUrls: string[] = [],
+  record?: RecordDraftDiagnostic,
 ): Promise<SourcePage[]> {
   if (!searchKey?.trim())
     throw new ManagementError(
@@ -60,6 +62,12 @@ export async function collectSources(
   const searchHint = /^ko(?:-|$)/i.test(language)
     ? "공식 자료"
     : "official source";
+  const query = `${keyword} ${searchHint}`;
+  await record?.({
+    stage: "source",
+    message: "Ceramic.ai 검색 요청",
+    details: [query],
+  });
 
   let response: Response;
   try {
@@ -70,7 +78,7 @@ export async function collectSources(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        query: `${keyword} ${searchHint}`,
+        query,
         maxResults: 6,
         maxDescriptionLength: 1000,
       }),

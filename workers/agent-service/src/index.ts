@@ -1,10 +1,13 @@
 import { Agent, getAgentByName } from "agents";
 import {
+  appendAiDraftDiagnostic,
   createPost,
+  finishAiDraftJob,
   getPost,
   savePostQaReview,
   getSettings,
   ManagementError,
+  startAiDraftJob,
 } from "@cloudflare-ai-blog/database";
 import {
   agentDraftRequestSchema,
@@ -15,6 +18,7 @@ import {
   type SourceImage,
   type AgentDraftRequest,
   type AiDraftSubjectSuggestion,
+  type RecordDraftDiagnostic,
 } from "@cloudflare-ai-blog/shared";
 import { findPublishedLinkCandidates } from "@cloudflare-ai-blog/database/public-blog";
 import { suggestDraftSubject } from "./generate-draft";
@@ -55,7 +59,7 @@ export class MainAgent extends Agent<AgentServiceEnv> {
     const operationKey = request.subject ? id : `${id}:subject`;
     const pending = this.inFlight.get(operationKey);
     if (pending) return pending;
-    const operation = this.writeDraft({ ...request, requestId: id });
+    const operation = this.runDraft({ ...request, requestId: id });
     this.inFlight.set(operationKey, operation);
     try {
       return await operation;
@@ -64,7 +68,53 @@ export class MainAgent extends Agent<AgentServiceEnv> {
     }
   }
 
-  private async writeDraft(request: AgentDraftRequest): Promise<DraftResult> {
+  private async runDraft(request: AgentDraftRequest): Promise<DraftResult> {
+    if (!request.subject) return this.writeDraft(request);
+
+    const { DB } = this.env;
+    const { requestId, keyword } = request;
+    await retryDatabase(() =>
+      startAiDraftJob(DB, this.name, requestId, keyword),
+    );
+    const record: RecordDraftDiagnostic = (event) =>
+      retryDatabase(() =>
+        appendAiDraftDiagnostic(DB, this.name, requestId, {
+          ...event,
+          at: Date.now(),
+        }),
+      ).catch(() =>
+        console.warn("Could not append AI draft diagnostic", {
+          requestId,
+          stage: event.stage,
+        }),
+      );
+    const result = await this.writeDraft(request, record);
+    await record({
+      stage: "save",
+      message:
+        "error" in result
+          ? `작업 실패 · ${result.error}`.slice(0, 500)
+          : "초안을 편집기에 저장했어요.",
+    });
+    try {
+      await retryDatabase(() =>
+        finishAiDraftJob(
+          DB,
+          this.name,
+          requestId,
+          "draft" in result ? "succeeded" : "failed",
+        ),
+      );
+    } catch (error) {
+      console.error("Could not record AI draft result", { requestId, error });
+    }
+    return result;
+  }
+
+  private async writeDraft(
+    request: AgentDraftRequest,
+    record?: RecordDraftDiagnostic,
+  ): Promise<DraftResult> {
     const { DB } = this.env;
     const blogId = this.name;
     const findSavedDraft = () =>
@@ -75,7 +125,13 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         .first<Draft>();
     try {
       const existing = await retryDatabase(findSavedDraft);
-      if (existing) return { draft: existing };
+      if (existing) {
+        await record?.({
+          stage: "save",
+          message: "같은 요청으로 이미 저장한 초안을 불러왔어요.",
+        });
+        return { draft: existing };
+      }
 
       const category = request.categoryId
         ? await retryDatabase(() =>
@@ -111,10 +167,12 @@ export class MainAgent extends Agent<AgentServiceEnv> {
                 candidates.set(image.url, image);
             }
         },
+        record,
       );
       const sourceImages = [...candidates.values()]
         .sort((a, b) => Number(!!b.license) - Number(!!a.license))
         .slice(0, 24);
+      await record?.({ stage: "save", message: "이미지와 내부 링크 준비" });
       const [images, linkedContent] = await Promise.all([
         generatePostImages(this.env, draft, sourceImages),
         (async () => {
@@ -196,6 +254,7 @@ export class MainAgent extends Agent<AgentServiceEnv> {
         content.content.push(sourceImageCredit(cover.source, true));
       const bucket = this.env.BLOG_MEDIA;
       let committed = false;
+      await record?.({ stage: "save", message: "초안과 이미지 저장" });
       try {
         try {
           for (const image of media)

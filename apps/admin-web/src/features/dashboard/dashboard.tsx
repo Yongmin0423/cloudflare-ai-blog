@@ -1,15 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { postDashboardResponseSchema } from "@cloudflare-ai-blog/shared";
 import {
-  initialJobs,
-  jobLabels,
-  jobsKey,
-  parseJobs,
-} from "@/features/ai-writing/demo-jobs";
+  postDashboardResponseSchema,
+  type AiJobStatus,
+} from "@cloudflare-ai-blog/shared";
 import { useApiResource } from "@/features/management/use-api-resource";
-import { useLocalDocument } from "@/features/management/use-local-document";
 import { statusLabels } from "@/features/posts/post-status";
 
 const metrics = [
@@ -24,18 +20,20 @@ const dateFormatter = new Intl.DateTimeFormat("ko-KR", {
   dateStyle: "short",
 });
 
+const jobLabels: Record<AiJobStatus, string> = {
+  running: "진행 중",
+  review: "검토 대기",
+  failed: "실패",
+  unconfirmed: "응답 없음",
+};
+
 export function Dashboard() {
   const posts = useApiResource(
     "/api/admin/dashboard",
     postDashboardResponseSchema,
   );
   const recent = posts.data?.recentPosts ?? [];
-  const jobs = useLocalDocument(jobsKey, initialJobs, parseJobs);
-  const review = jobs.data.filter((job) => job.status === "review").length;
-  const running = jobs.data.filter((job) =>
-    ["queued", "running"].includes(job.status),
-  ).length;
-  const failed = jobs.data.filter((job) => job.status === "failed").length;
+  const jobs = posts.data?.aiJobs;
 
   return (
     <>
@@ -147,43 +145,67 @@ export function Dashboard() {
           )}
         </section>
 
-        <section className="settings-card" aria-labelledby="job-overview-title">
-          <h2 id="job-overview-title">AI 작업 현황</h2>
-          <p>AI 작업 연동 전까지 샘플 작업을 표시해요.</p>
-          {jobs.error ? (
+        <section
+          className="settings-card"
+          aria-labelledby="job-overview-title"
+          aria-busy={!posts.ready}
+        >
+          <div className="section-toolbar">
+            <h2 id="job-overview-title">AI 작업 현황</h2>
+            <button
+              className="outline-button"
+              type="button"
+              onClick={posts.reload}
+              disabled={!posts.ready}
+            >
+              새로고침
+            </button>
+          </div>
+          {posts.error ? (
             <p className="editor-errors" role="alert">
-              {jobs.error}
+              AI 작업 현황을 불러오지 못했어요.
             </p>
-          ) : !jobs.ready ? (
-            <p role="status">샘플 작업을 불러오는 중이에요.</p>
+          ) : !jobs ? (
+            <p role="status">AI 작업 현황을 불러오는 중이에요.</p>
           ) : (
             <>
               <div className="job-overview">
                 <p>
-                  대기·진행 중<strong>{running}</strong>
+                  진행 중<strong>{jobs.counts.running}</strong>
                 </p>
                 <p>
-                  검토 대기<strong>{review}</strong>
+                  검토 대기<strong>{jobs.counts.review}</strong>
                 </p>
                 <p>
-                  실패<strong>{failed}</strong>
+                  실패·응답 없음<strong>{jobs.counts.failed}</strong>
                 </p>
               </div>
               <ul className="dashboard-job-list">
-                {jobs.data.slice(0, 3).map((job) => (
+                {jobs.recent.map((job) => (
                   <li key={job.id}>
-                    <span>{job.keyword}</span>
-                    <span className={`job-badge job-${job.status}`}>
+                    {job.status === "review" ? (
+                      <Link
+                        className="post-title"
+                        href={`/posts/${job.id}/edit`}
+                      >
+                        {job.title}
+                      </Link>
+                    ) : (
+                      <span>{job.title}</span>
+                    )}
+                    <span
+                      className={`job-badge job-${job.status === "unconfirmed" ? "failed" : job.status}`}
+                    >
                       {jobLabels[job.status]}
                     </span>
                   </li>
                 ))}
               </ul>
-              {jobs.data.length === 0 && <p>아직 샘플 작업이 없어요.</p>}
+              {jobs.recent.length === 0 && <p>표시할 AI 작업이 없어요.</p>}
             </>
           )}
           <Link className="secondary-link" href="/ai-writing">
-            작업 확인하기 →
+            AI 글쓰기 →
           </Link>
         </section>
       </div>
