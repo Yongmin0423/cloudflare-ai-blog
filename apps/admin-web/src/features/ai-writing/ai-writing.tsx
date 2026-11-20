@@ -5,6 +5,8 @@ import { z } from "zod";
 import { useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  aiDraftBodyProviderSchema,
+  aiDraftProvidersResponseSchema,
   aiDraftReferenceUrlLimit,
   aiDraftReferenceUrlMaxLength,
   aiDraftRequestSchema,
@@ -12,12 +14,18 @@ import {
   aiDraftSubjectTypeSchema,
   type AiDraftSubjectSuggestion,
   type AiDraftSubjectType,
+  type AiDraftBodyProvider,
   categoriesResponseSchema,
   chatGptStatusSchema,
   settingsResponseSchema,
   validationMessages,
 } from "@cloudflare-ai-blog/shared";
 import { useApiResource } from "@/features/management/use-api-resource";
+
+const providerLabels: Record<AiDraftBodyProvider, string> = {
+  openai: "OpenAI GPT · GPT-5.4 mini",
+  anthropic: "Claude · Sonnet 5.5",
+};
 
 const subjectTypeLabels = {
   general: "일반 주제",
@@ -237,6 +245,10 @@ export function AiWriting({
     "/api/admin/settings",
     settingsResponseSchema,
   );
+  const draftProviders = useApiResource(
+    "/api/admin/ai-drafts",
+    aiDraftProvidersResponseSchema,
+  );
   const [keyword, setKeyword] = useState("");
   const [subject, setSubject] = useState<AiDraftSubjectSuggestion | null>(null);
   const [categoryId, setCategoryId] = useState("");
@@ -244,6 +256,7 @@ export function AiWriting({
   const [referenceFields, setReferenceFields] = useState([{ id: 0, url: "" }]);
   const nextReferenceFieldId = useRef(1);
   const [chatGptModel, setChatGptModel] = useState("");
+  const [bodyProvider, setBodyProvider] = useState<AiDraftBodyProvider>();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [draft, setDraft] = useState<{ id: string; title: string } | null>(
@@ -253,7 +266,8 @@ export function AiWriting({
   const submitting = useRef(false);
   const writing = settings.data?.settings;
   const ready = !!writing && !!categories.data;
-  const needsChatGpt = localChatGpt && !!subject && !chatGptModel;
+  const usingChatGpt = localChatGpt && !bodyProvider;
+  const needsChatGpt = usingChatGpt && !!subject && !chatGptModel;
   const referenceUrls = referenceFields
     .map(({ url }) => url.trim())
     .filter(Boolean);
@@ -276,7 +290,9 @@ export function AiWriting({
       instructions,
       referenceUrls: referenceUrls.length ? referenceUrls : undefined,
       subject: subject ?? undefined,
-      chatGptModel: subject && chatGptModel ? chatGptModel : undefined,
+      bodyProvider: subject ? bodyProvider : undefined,
+      chatGptModel:
+        subject && usingChatGpt && chatGptModel ? chatGptModel : undefined,
     });
     if (!parsed.success) {
       setError(validationMessages(parsed.error).join("\n"));
@@ -348,7 +364,45 @@ export function AiWriting({
         <section className="settings-card">
           <h2>새 글 생성 요청</h2>
           <form className="management-form" onSubmit={create}>
-            {localChatGpt && (
+            <label>
+              제목·본문 작성 모델
+              <select
+                value={bodyProvider ?? "default"}
+                disabled={pending}
+                onChange={(event) => {
+                  const provider = aiDraftBodyProviderSchema.safeParse(
+                    event.target.value,
+                  );
+                  setBodyProvider(provider.success ? provider.data : undefined);
+                  edited();
+                }}
+              >
+                <option value="default">
+                  {localChatGpt ? "ChatGPT 구독" : "Cloudflare Workers AI"}
+                </option>
+                {aiDraftBodyProviderSchema.options.map((provider) => {
+                  const available =
+                    draftProviders.data?.providers.includes(provider);
+                  return (
+                    <option
+                      key={provider}
+                      value={provider}
+                      disabled={!available}
+                    >
+                      {providerLabels[provider]}
+                      {available
+                        ? ""
+                        : draftProviders.loading
+                          ? " (확인 중)"
+                          : draftProviders.error
+                            ? " (확인 실패)"
+                            : " (설정 필요)"}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            {usingChatGpt && (
               <ChatGptOptions
                 model={chatGptModel}
                 disabled={pending}
@@ -534,7 +588,7 @@ export function AiWriting({
               disabled={!ready || needsChatGpt || pending || !!draft}
             >
               {subject
-                ? localChatGpt
+                ? usingChatGpt
                   ? referenceUrls.length
                     ? "참고 URL과 웹 검색으로 초안 생성"
                     : "출처 검색하고 초안 생성"

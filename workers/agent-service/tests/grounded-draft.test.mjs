@@ -39,6 +39,8 @@ const { reviewPost } = await import("../src/review-post.ts");
 const { suggestPostSeo } = await import("../src/suggest-post-seo.ts");
 const { prepareDraft } = await import("../src/prepare-draft.ts");
 const { generatePostImages } = await import("../src/generate-cover.ts");
+const { availableDraftProviders, generateExternalDraftBody } =
+  await import("../src/external-draft-body.ts");
 
 test("AI plans distinct section images alongside the cover and rejects non-JPEG output", async () => {
   const jpeg = Uint8Array.of(0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9);
@@ -1121,17 +1123,78 @@ test("a missing QA verdict is retried without rewriting the body", async (t) => 
   ]);
 });
 
-test("default draft prepares the article and SEO together without a web request", async (t) => {
-  const fetch = t.mock.method(globalThis, "fetch", () =>
-    assert.fail("Unexpected web request"),
-  );
+test("selected API writes the article while Workers AI handles outline and SEO", async (t) => {
   const seo = {
     seoTitle: "기계식 키보드 첫 구매 가이드",
     seoDescription:
       "키 배열과 타건 소리를 비교해 처음 쓸 기계식 키보드를 고르는 방법을 알아보세요.",
   };
   const stages = [];
+  const article = {
+    title: "첫 기계식 키보드를 고르는 기준",
+    introduction: {
+      text: "처음 구매한다면 키보드를 놓을 자리와 업무에 필요한 키를 먼저 확인하세요.",
+      evidenceIds: [],
+    },
+    sections: {
+      section_1: [
+        {
+          text: "처음 구매한다면 키보드를 놓을 자리와 업무에 필요한 키를 먼저 확인하세요. 숫자 입력이 잦다면 별도의 숫자 키패드가 필요한지 생각해 보세요.",
+          evidenceIds: [],
+        },
+      ],
+      section_2: [
+        {
+          text: "공유 공간에서 쓴다면 직접 타건 소리를 들어보고 선택하세요.",
+          evidenceIds: [],
+        },
+      ],
+    },
+  };
+  const fetch = t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(init.redirect, "error");
+    const request = JSON.parse(init.body);
+    const text = JSON.stringify(article);
+    if (url === "https://api.openai.com/v1/responses") {
+      stages.push("openai");
+      assert.equal(init.headers.Authorization, "Bearer test-openai");
+      assert.equal(request.store, false);
+      assert.equal(request.model, "gpt-5.4-mini");
+      assert.deepEqual(
+        request.text.format.schema.properties.sections.required,
+        ["section_1", "section_2"],
+      );
+      return Response.json({
+        status: "completed",
+        output: [
+          { type: "reasoning" },
+          { type: "message", content: [{ type: "output_text", text }] },
+        ],
+      });
+    }
+    assert.equal(url, "https://api.anthropic.com/v1/messages");
+    stages.push("anthropic");
+    assert.equal(init.headers.Authorization, "Bearer test-anthropic");
+    assert.equal(init.headers["anthropic-version"], "2026-10-21");
+    assert.equal(request.model, "claude-sonnet-5-5");
+    const schema = request.output_config.format.schema;
+    assert.equal(schema.properties.title.maxLength, undefined);
+    assert.equal(
+      schema.properties.introduction.properties.evidenceIds.maxItems,
+      undefined,
+    );
+    assert.deepEqual(schema.properties.sections.required, [
+      "section_1",
+      "section_2",
+    ]);
+    return Response.json({
+      stop_reason: "end_turn",
+      content: [{ type: "thinking" }, { type: "text", text }],
+    });
+  });
   const env = {
+    OPENAI_API_KEY: "test-openai",
+    ANTHROPIC_API_KEY: "test-anthropic",
     AI: {
       async run(_model, request) {
         const { name, schema } = request.response_format.json_schema;
@@ -1185,27 +1248,7 @@ test("default draft prepares the article and SEO together without a web request"
             schema.properties.introduction.properties.evidenceIds.maxItems,
             0,
           );
-          response = {
-            title: "첫 기계식 키보드를 고르는 기준",
-            introduction: {
-              text: "처음 구매한다면 키보드를 놓을 자리와 업무에 필요한 키를 먼저 확인하세요.",
-              evidenceIds: [],
-            },
-            sections: {
-              section_1: [
-                {
-                  text: "처음 구매한다면 키보드를 놓을 자리와 업무에 필요한 키를 먼저 확인하세요. 숫자 입력이 잦다면 별도의 숫자 키패드가 필요한지 생각해 보세요.",
-                  evidenceIds: [],
-                },
-              ],
-              section_2: [
-                {
-                  text: "공유 공간에서 쓴다면 직접 타건 소리를 들어보고 선택하세요.",
-                  evidenceIds: [],
-                },
-              ],
-            },
-          };
+          response = article;
         }
         return {
           choices: [
@@ -1218,33 +1261,60 @@ test("default draft prepares the article and SEO together without a web request"
       },
     },
   };
-  const draft = await prepareDraft(
-    env,
-    {
-      requestId: crypto.randomUUID(),
-      keyword: "기계식 키보드 고르는 법",
-      subject: { name: "기계식 키보드 고르기", type: "general" },
-      categoryId: null,
-      instructions: "처음 구매하는 독자 대상",
-    },
-    settings,
-    null,
+  assert.deepEqual(availableDraftProviders({}), []);
+  assert.deepEqual(availableDraftProviders({ ANTHROPIC_API_KEY: "test" }), [
+    "anthropic",
+  ]);
+  for (const bodyProvider of [undefined, "openai", "anthropic"]) {
+    const before = fetch.mock.callCount();
+    stages.length = 0;
+    const draft = await prepareDraft(
+      env,
+      {
+        requestId: crypto.randomUUID(),
+        keyword: "기계식 키보드 고르는 법",
+        subject: { name: "기계식 키보드 고르기", type: "general" },
+        categoryId: null,
+        instructions: "처음 구매하는 독자 대상",
+        bodyProvider,
+      },
+      settings,
+      null,
+    );
+    assert.deepEqual(stages, [
+      "article_plan",
+      bodyProvider ?? "article_draft",
+      "post_seo",
+    ]);
+    assert.equal(fetch.mock.callCount() - before, bodyProvider ? 1 : 0);
+    assert.equal(draft.seoTitle, seo.seoTitle);
+    assert.equal(draft.seoDescription, seo.seoDescription);
+    assert.equal(draft.title, article.title);
+    assert.equal(draft.content.content.length, 5);
+    assert.equal(
+      draft.content.content[2].content[0].text,
+      "숫자 입력이 잦다면 별도의 숫자 키패드가 필요한지 생각해 보세요.",
+    );
+    assert.ok(
+      draft.content.content.every((block) =>
+        block.content.every((node) => !node.marks),
+      ),
+    );
+  }
+});
+
+test("an unconfigured or rate-limited API fails without switching providers", async (t) => {
+  const fetch = t.mock.method(
+    globalThis,
+    "fetch",
+    async () => new Response(null, { status: 429 }),
   );
-  assert.deepEqual(stages, ["article_plan", "article_draft", "post_seo"]);
-  assert.equal(draft.seoTitle, seo.seoTitle);
-  assert.equal(draft.seoDescription, seo.seoDescription);
+  const run = (env) =>
+    generateExternalDraftBody(env, "openai", "Write JSON", "{}", {}, 5000);
+  await assert.rejects(run({ ANTHROPIC_API_KEY: "test" }), { status: 503 });
   assert.equal(fetch.mock.callCount(), 0);
-  assert.equal(draft.title, "첫 기계식 키보드를 고르는 기준");
-  assert.equal(draft.content.content.length, 5);
-  assert.equal(
-    draft.content.content[2].content[0].text,
-    "숫자 입력이 잦다면 별도의 숫자 키패드가 필요한지 생각해 보세요.",
-  );
-  assert.ok(
-    draft.content.content.every((block) =>
-      block.content.every((node) => !node.marks),
-    ),
-  );
+  await assert.rejects(run({ OPENAI_API_KEY: "test" }), { status: 429 });
+  assert.equal(fetch.mock.callCount(), 1);
 });
 
 test("drafts must answer the outline before reaching storage", async (t) => {

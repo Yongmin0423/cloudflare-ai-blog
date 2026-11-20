@@ -48,6 +48,12 @@ const referenceUrlSchema = z
     );
   }, "로그인 정보가 없는 공개 페이지 주소를 입력해 주세요.");
 
+export const aiDraftBodyProviderSchema = z.enum(["openai", "anthropic"]);
+export type AiDraftBodyProvider = z.infer<typeof aiDraftBodyProviderSchema>;
+export const aiDraftProvidersResponseSchema = z.strictObject({
+  providers: z.array(aiDraftBodyProviderSchema).max(2),
+});
+
 export const aiDraftRequestSchema = z.strictObject({
   requestId: z.string().uuid(),
   keyword: z.string().trim().min(1, "키워드를 입력해 주세요.").max(100),
@@ -58,6 +64,7 @@ export const aiDraftRequestSchema = z.strictObject({
     .max(aiDraftReferenceUrlLimit, "참고 URL은 최대 5개까지 추가할 수 있어요.")
     .optional(),
   subject: aiDraftSubjectSchema.optional(),
+  bodyProvider: aiDraftBodyProviderSchema.optional(),
   chatGptModel: z.string().trim().min(1).max(100).optional(),
 });
 
