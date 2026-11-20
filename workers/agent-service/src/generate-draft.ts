@@ -1,6 +1,7 @@
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import {
   aiDraftSubjectSuggestionSchema,
+  draftProviderForModel,
   postInputSchema,
   type AgentDraftRequest,
   type AiDraftRequest,
@@ -153,11 +154,15 @@ export async function generate<T extends z.ZodType>(
   input: object,
   maxOutputTokens: number,
   editorialFeedback?: string,
-  writer?: Pick<AgentDraftRequest, "chatGptTicket" | "bodyProvider">,
+  writer?: Pick<AgentDraftRequest, "chatGptTicket" | "bodyModel">,
 ): Promise<z.output<T>> {
   const { $schema, ...format } = z.toJSONSchema(schema, {
     override({ jsonSchema }) {
-      if (writer?.bodyProvider !== "anthropic") return;
+      if (
+        !writer?.bodyModel ||
+        draftProviderForModel(writer.bodyModel) !== "anthropic"
+      )
+        return;
       // Claude accepts the shape; Zod still enforces these limits after generation.
       delete jsonSchema.minLength;
       delete jsonSchema.maxLength;
@@ -176,10 +181,10 @@ export async function generate<T extends z.ZodType>(
       context,
       format,
     );
-  } else if (writer?.bodyProvider) {
+  } else if (writer?.bodyModel) {
     content = await generateExternalDraftBody(
       env,
-      writer.bodyProvider,
+      writer.bodyModel,
       prompt,
       context,
       format,

@@ -10,7 +10,7 @@ ChatGPT 계정 연결에는 로컬 관리자 개발 서버의 3001번 포트와 
 
 ### OpenAI·Claude API로 본문 작성
 
-**AI 글쓰기 → 제목·본문 작성 모델**에서 OpenAI GPT-5.4 mini 또는 Claude Sonnet 5.5를 선택할 수 있습니다. 해당 시크릿이 있는 모델만 선택할 수 있으며 각 모델을 독립적으로 설정합니다. 목차와 SEO, 이미지, 검증은 기존 Workers AI 흐름을 사용합니다. 참고 URL과 별도로 설정한 Ceramic 검색의 출처도 기존과 같이 사용합니다.
+**AI 글쓰기 → 제목·본문 작성 모델**에서 OpenAI는 GPT-6 Luna, GPT-5.4 mini, GPT-6.1 Terra, GPT-6.2 Sol·Astra를, Claude는 Haiku·Sonnet·Opus 5.5를 지원합니다. 연결한 API 키로 모델 목록을 조회해 선택할 수 있는 항목만 표시합니다. 각 제공자는 독립적으로 설정합니다. 목차와 SEO, 이미지, 검증은 기존 Workers AI 흐름을 사용합니다. 참고 URL과 별도로 설정한 Ceramic 검색의 출처도 기존과 같이 사용합니다.
 
 운영에서 사용하려면 이 기능이 담긴 Agent와 관리자 Worker를 배포하고, 저장소 루트에서 필요한 키를 해당 Worker 시크릿에 등록합니다. CLI 프롬프트에 값을 입력합니다. API 사용량은 각 제공자의 API 계정에 기록됩니다. [OpenAI API 시작하기](https://developers.openai.com/api/docs/quickstart) · [Claude API 인증](https://platform.claude.com/docs/en/manage-claude/authentication)
 

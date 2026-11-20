@@ -18,7 +18,7 @@ import {
 } from "@cloudflare-ai-blog/shared";
 import { findPublishedLinkCandidates } from "@cloudflare-ai-blog/database/public-blog";
 import { suggestDraftSubject } from "./generate-draft";
-import { availableDraftProviders } from "./external-draft-body";
+import { hasDraftModelKey, listDraftProviders } from "./external-draft-body";
 import { addInternalLinks, internalLinkTerms } from "./internal-links";
 import { prepareDraft } from "./prepare-draft";
 import { generatePostImages } from "./generate-cover";
@@ -343,7 +343,7 @@ export default {
     if (request.method === "GET" && pathname === "/draft-providers") {
       if (request.headers.has("origin"))
         return new Response(null, { status: 403 });
-      return Response.json({ providers: availableDraftProviders(env) });
+      return Response.json({ providers: await listDraftProviders(env) });
     }
     if (
       request.method !== "POST" ||
@@ -369,19 +369,19 @@ export default {
       );
 
     const { blogId, ...draftRequest } = input.data;
-    const { bodyProvider, subject, chatGptTicket } = draftRequest;
+    const { bodyModel, subject, chatGptTicket } = draftRequest;
     const local = origin === "http://127.0.0.1:8789";
-    if (bodyProvider && (!subject || chatGptTicket))
+    if (bodyModel && (!subject || chatGptTicket))
       return Response.json(
         { error: "본문 작성 모델을 하나만 선택해 주세요." },
         { status: 400 },
       );
-    if (bodyProvider && !availableDraftProviders(env).includes(bodyProvider))
+    if (bodyModel && !hasDraftModelKey(env, bodyModel))
       return Response.json(
         { error: "선택한 API 모델의 연결이 설정되지 않았어요." },
         { status: 503 },
       );
-    if (local && subject && !bodyProvider && !chatGptTicket)
+    if (local && subject && !bodyModel && !chatGptTicket)
       return Response.json(
         {
           error:

@@ -1,6 +1,9 @@
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import {
+  aiDraftBodyModels,
   aiDraftBodyProviderSchema,
+  draftProviderForModel,
+  type AiDraftBodyModel,
   type AiDraftBodyProvider,
 } from "@cloudflare-ai-blog/shared";
 import { z } from "zod";
@@ -11,9 +14,73 @@ function providerKey(env: AgentServiceEnv, provider: AiDraftBodyProvider) {
   )?.trim();
 }
 
-export function availableDraftProviders(env: AgentServiceEnv) {
-  return aiDraftBodyProviderSchema.options.filter((provider) =>
-    providerKey(env, provider),
+function providerHeaders(provider: AiDraftBodyProvider, key: string) {
+  return {
+    Authorization: `Bearer ${key}`,
+    ...(provider === "anthropic" ? { "anthropic-version": "2026-10-21" } : {}),
+  };
+}
+
+export function hasDraftModelKey(
+  env: AgentServiceEnv,
+  model: AiDraftBodyModel,
+) {
+  return !!providerKey(env, draftProviderForModel(model));
+}
+
+const modelListSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      lifecycle: z.string().optional(),
+      shutdown_date: z.string().nullable().optional(),
+    }),
+  ),
+});
+
+export async function listDraftProviders(env: AgentServiceEnv) {
+  return Promise.all(
+    aiDraftBodyProviderSchema.options.map(async (provider) => {
+      const key = providerKey(env, provider);
+      if (!key) return { provider, status: "unconfigured", models: [] };
+      try {
+        const response = await fetch(
+          provider === "openai"
+            ? "https://api.openai.com/v1/models"
+            : "https://api.anthropic.com/v1/models?limit=1000",
+          {
+            headers: providerHeaders(provider, key),
+            redirect: "error",
+            signal: AbortSignal.timeout(5000),
+          },
+        );
+        if (!response.ok) {
+          await response.body?.cancel();
+          return { provider, status: "unavailable", models: [] };
+        }
+        const { data } = modelListSchema.parse(await response.json());
+        const available = new Set(
+          data
+            .filter(
+              ({ lifecycle, shutdown_date }) =>
+                (!lifecycle || lifecycle === "active") &&
+                (!shutdown_date || Date.parse(shutdown_date) > Date.now()),
+            )
+            .map(({ id }) => id),
+        );
+        return {
+          provider,
+          status: "ready",
+          models: aiDraftBodyModels
+            .filter(
+              (model) => model.provider === provider && available.has(model.id),
+            )
+            .map(({ id }) => id),
+        };
+      } catch {
+        return { provider, status: "unavailable", models: [] };
+      }
+    }),
   );
 }
 
@@ -31,12 +98,13 @@ const claudeResponse = z.object({
 
 export async function generateExternalDraftBody(
   env: AgentServiceEnv,
-  provider: AiDraftBodyProvider,
+  model: AiDraftBodyModel,
   instructions: string,
   input: string,
   schema: object,
   maxOutputTokens: number,
 ) {
+  const provider = draftProviderForModel(model);
   const openAi = provider === "openai";
   const label = openAi ? "OpenAI GPT" : "Claude";
   const key = providerKey(env, provider);
@@ -51,14 +119,13 @@ export async function generateExternalDraftBody(
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${key}`,
+        ...providerHeaders(provider, key),
         "Content-Type": "application/json",
-        ...(!openAi ? { "anthropic-version": "2026-10-21" } : {}),
       },
       body: JSON.stringify(
         openAi
           ? {
-              model: "gpt-5.4-mini",
+              model,
               instructions,
               input,
               store: false,
@@ -69,7 +136,7 @@ export async function generateExternalDraftBody(
               },
             }
           : {
-              model: "claude-sonnet-5-5",
+              model,
               system: instructions,
               messages: [{ role: "user", content: input }],
               max_tokens: maxOutputTokens,

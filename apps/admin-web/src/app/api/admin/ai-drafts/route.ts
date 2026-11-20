@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     if (
       process.env.NODE_ENV === "development" &&
       input.subject &&
-      !input.bodyProvider &&
+      !input.bodyModel &&
       !chatGptModel
     )
       throw new ManagementError(
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
         "ChatGPT를 연결하고 본문 작성 모델을 선택해 주세요.",
       );
     if (chatGptModel) {
-      if (!localChatGpt || !input.subject || input.bodyProvider)
+      if (!localChatGpt || !input.subject || input.bodyModel)
         throw new ManagementError(
           400,
           "로컬 관리자에서 대상을 확인한 뒤 ChatGPT를 선택해 주세요.",

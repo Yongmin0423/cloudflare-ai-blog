@@ -39,7 +39,7 @@ const { reviewPost } = await import("../src/review-post.ts");
 const { suggestPostSeo } = await import("../src/suggest-post-seo.ts");
 const { prepareDraft } = await import("../src/prepare-draft.ts");
 const { generatePostImages } = await import("../src/generate-cover.ts");
-const { availableDraftProviders, generateExternalDraftBody } =
+const { listDraftProviders, generateExternalDraftBody } =
   await import("../src/external-draft-body.ts");
 
 test("AI plans distinct section images alongside the cover and rejects non-JPEG output", async () => {
@@ -1159,7 +1159,7 @@ test("selected API writes the article while Workers AI handles outline and SEO",
       stages.push("openai");
       assert.equal(init.headers.Authorization, "Bearer test-openai");
       assert.equal(request.store, false);
-      assert.equal(request.model, "gpt-5.4-mini");
+      assert.equal(request.model, "gpt-6.1-terra");
       assert.deepEqual(
         request.text.format.schema.properties.sections.required,
         ["section_1", "section_2"],
@@ -1176,7 +1176,7 @@ test("selected API writes the article while Workers AI handles outline and SEO",
     stages.push("anthropic");
     assert.equal(init.headers.Authorization, "Bearer test-anthropic");
     assert.equal(init.headers["anthropic-version"], "2026-10-21");
-    assert.equal(request.model, "claude-sonnet-5-5");
+    assert.equal(request.model, "claude-haiku-5-5");
     const schema = request.output_config.format.schema;
     assert.equal(schema.properties.title.maxLength, undefined);
     assert.equal(
@@ -1261,11 +1261,10 @@ test("selected API writes the article while Workers AI handles outline and SEO",
       },
     },
   };
-  assert.deepEqual(availableDraftProviders({}), []);
-  assert.deepEqual(availableDraftProviders({ ANTHROPIC_API_KEY: "test" }), [
-    "anthropic",
-  ]);
-  for (const bodyProvider of [undefined, "openai", "anthropic"]) {
+  for (const bodyModel of [undefined, "gpt-6.1-terra", "claude-haiku-5-5"]) {
+    const provider = bodyModel?.startsWith("gpt-")
+      ? "openai"
+      : bodyModel && "anthropic";
     const before = fetch.mock.callCount();
     stages.length = 0;
     const draft = await prepareDraft(
@@ -1276,17 +1275,17 @@ test("selected API writes the article while Workers AI handles outline and SEO",
         subject: { name: "기계식 키보드 고르기", type: "general" },
         categoryId: null,
         instructions: "처음 구매하는 독자 대상",
-        bodyProvider,
+        bodyModel,
       },
       settings,
       null,
     );
     assert.deepEqual(stages, [
       "article_plan",
-      bodyProvider ?? "article_draft",
+      provider ?? "article_draft",
       "post_seo",
     ]);
-    assert.equal(fetch.mock.callCount() - before, bodyProvider ? 1 : 0);
+    assert.equal(fetch.mock.callCount() - before, bodyModel ? 1 : 0);
     assert.equal(draft.seoTitle, seo.seoTitle);
     assert.equal(draft.seoDescription, seo.seoDescription);
     assert.equal(draft.title, article.title);
@@ -1303,6 +1302,51 @@ test("selected API writes the article while Workers AI handles outline and SEO",
   }
 });
 
+test("model picker lists only compatible models returned for the configured API key", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(init.redirect, "error");
+    if (url === "https://api.openai.com/v1/models") {
+      assert.equal(init.headers.Authorization, "Bearer test-openai");
+      return Response.json({
+        data: [
+          { id: "gpt-6.2-sol" },
+          { id: "gpt-6-luna" },
+          { id: "gpt-5.4-mini", shutdown_date: "2000-01-01" },
+          { id: "gpt-image-2" },
+          { id: "claude-opus-5-5" },
+        ],
+      });
+    }
+    assert.equal(url, "https://api.anthropic.com/v1/models?limit=1000");
+    assert.equal(init.headers.Authorization, "Bearer test-claude");
+    return Response.json({
+      data: [
+        { id: "claude-haiku-5-5", lifecycle: "active" },
+        { id: "claude-sonnet-5-5", lifecycle: "deprecated" },
+      ],
+    });
+  });
+  assert.deepEqual(await listDraftProviders({}), [
+    { provider: "openai", status: "unconfigured", models: [] },
+    { provider: "anthropic", status: "unconfigured", models: [] },
+  ]);
+  assert.equal(fetch.mock.callCount(), 0);
+  assert.deepEqual(
+    await listDraftProviders({
+      OPENAI_API_KEY: "test-openai",
+      ANTHROPIC_API_KEY: "test-claude",
+    }),
+    [
+      {
+        provider: "openai",
+        status: "ready",
+        models: ["gpt-6-luna", "gpt-6.2-sol"],
+      },
+      { provider: "anthropic", status: "ready", models: ["claude-haiku-5-5"] },
+    ],
+  );
+});
+
 test("an unconfigured or rate-limited API fails without switching providers", async (t) => {
   const fetch = t.mock.method(
     globalThis,
@@ -1310,7 +1354,14 @@ test("an unconfigured or rate-limited API fails without switching providers", as
     async () => new Response(null, { status: 429 }),
   );
   const run = (env) =>
-    generateExternalDraftBody(env, "openai", "Write JSON", "{}", {}, 5000);
+    generateExternalDraftBody(
+      env,
+      "gpt-5.4-mini",
+      "Write JSON",
+      "{}",
+      {},
+      5000,
+    );
   await assert.rejects(run({ ANTHROPIC_API_KEY: "test" }), { status: 503 });
   assert.equal(fetch.mock.callCount(), 0);
   await assert.rejects(run({ OPENAI_API_KEY: "test" }), { status: 429 });
