@@ -1,5 +1,6 @@
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import {
+  aiDraftProvidersResponseSchema,
   aiDraftRequestSchema,
   aiDraftResponseSchema,
 } from "@cloudflare-ai-blog/shared";
@@ -11,6 +12,40 @@ import {
   isLocalChatGptRequest,
   releaseChatGptTicket,
 } from "@/lib/chatgpt";
+
+async function fetchDraftAgent(
+  path: "/drafts" | "/draft-providers",
+  init?: RequestInit,
+) {
+  const isDevelopment = process.env.NODE_ENV === "development";
+  try {
+    if (isDevelopment) return await fetch(`http://127.0.0.1:8789${path}`, init);
+    const { env } = await getCloudflareContext({ async: true });
+    return await env.AGENT_SERVICE.fetch(`https://agent-service${path}`, init);
+  } catch {
+    throw new ManagementError(
+      503,
+      isDevelopment
+        ? "AI 글쓰기 Worker에 연결하지 못했어요. 프로젝트 루트의 별도 터미널에서 pnpm dev:agent를 실행해 주세요."
+        : "AI 글쓰기 서비스에 연결하지 못했어요. 서비스 실행 상태를 확인해 주세요.",
+    );
+  }
+}
+
+export async function GET(request: Request) {
+  try {
+    await guard(request);
+    const response = await fetchDraftAgent("/draft-providers");
+    const result = aiDraftProvidersResponseSchema.safeParse(
+      await response.json().catch(() => null),
+    );
+    if (!response.ok || !result.success)
+      throw new ManagementError(502, "API 모델 설정을 확인하지 못했어요.");
+    return json(result.data);
+  } catch (error) {
+    return apiError(error);
+  }
+}
 
 export async function POST(request: Request) {
   let chatGptTicket: string | undefined;
@@ -24,6 +59,7 @@ export async function POST(request: Request) {
     if (
       process.env.NODE_ENV === "development" &&
       input.subject &&
+      !input.bodyModel &&
       !chatGptModel
     )
       throw new ManagementError(
@@ -31,7 +67,7 @@ export async function POST(request: Request) {
         "ChatGPT를 연결하고 본문 작성 모델을 선택해 주세요.",
       );
     if (chatGptModel) {
-      if (!localChatGpt || !input.subject)
+      if (!localChatGpt || !input.subject || input.bodyModel)
         throw new ManagementError(
           400,
           "로컬 관리자에서 대상을 확인한 뒤 ChatGPT를 선택해 주세요.",
@@ -41,32 +77,11 @@ export async function POST(request: Request) {
         chatGptModel,
       );
     }
-    const init = {
+    const response = await fetchDraftAgent("/drafts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...input, blogId, chatGptTicket }),
-    };
-
-    const isDevelopment = process.env.NODE_ENV === "development";
-    let response: Response;
-    try {
-      if (isDevelopment) {
-        response = await fetch("http://127.0.0.1:8789/drafts", init);
-      } else {
-        const { env } = await getCloudflareContext({ async: true });
-        response = await env.AGENT_SERVICE.fetch(
-          "https://agent-service/drafts",
-          init,
-        );
-      }
-    } catch {
-      throw new ManagementError(
-        503,
-        isDevelopment
-          ? "AI 글쓰기 Worker에 연결하지 못했어요. 프로젝트 루트의 별도 터미널에서 pnpm dev:agent를 실행해 주세요."
-          : "AI 글쓰기 서비스에 연결하지 못했어요. 서비스 실행 상태를 확인해 주세요.",
-      );
-    }
+    });
 
     const result: unknown = await response.json().catch(() => null);
     if (!response.ok) {

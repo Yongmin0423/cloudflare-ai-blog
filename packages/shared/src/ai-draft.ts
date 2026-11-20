@@ -48,6 +48,41 @@ const referenceUrlSchema = z
     );
   }, "로그인 정보가 없는 공개 페이지 주소를 입력해 주세요.");
 
+export const aiDraftBodyProviderSchema = z.enum(["openai", "anthropic"]);
+export type AiDraftBodyProvider = z.infer<typeof aiDraftBodyProviderSchema>;
+export const aiDraftBodyModels = [
+  { id: "gpt-6-luna", provider: "openai", label: "GPT-6 Luna" },
+  { id: "gpt-5.4-mini", provider: "openai", label: "GPT-5.4 mini" },
+  { id: "gpt-6.1-terra", provider: "openai", label: "GPT-6.1 Terra" },
+  { id: "gpt-6.2-sol", provider: "openai", label: "GPT-6.2 Sol" },
+  { id: "gpt-6.2-astra", provider: "openai", label: "GPT-6.2 Astra" },
+  { id: "claude-haiku-5-5", provider: "anthropic", label: "Claude Haiku 5.5" },
+  {
+    id: "claude-sonnet-5-5",
+    provider: "anthropic",
+    label: "Claude Sonnet 5.5",
+  },
+  { id: "claude-opus-5-5", provider: "anthropic", label: "Claude Opus 5.5" },
+] as const;
+export const aiDraftBodyModelSchema = z.enum(
+  aiDraftBodyModels.map(({ id }) => id),
+);
+export type AiDraftBodyModel = z.infer<typeof aiDraftBodyModelSchema>;
+export function draftProviderForModel(model: AiDraftBodyModel) {
+  return aiDraftBodyModels.find(({ id }) => id === model)!.provider;
+}
+export const aiDraftProvidersResponseSchema = z.strictObject({
+  providers: z
+    .array(
+      z.strictObject({
+        provider: aiDraftBodyProviderSchema,
+        status: z.enum(["unconfigured", "ready", "unavailable"]),
+        models: z.array(aiDraftBodyModelSchema).max(aiDraftBodyModels.length),
+      }),
+    )
+    .max(2),
+});
+
 export const aiDraftRequestSchema = z.strictObject({
   requestId: z.string().uuid(),
   keyword: z.string().trim().min(1, "키워드를 입력해 주세요.").max(100),
@@ -58,6 +93,7 @@ export const aiDraftRequestSchema = z.strictObject({
     .max(aiDraftReferenceUrlLimit, "참고 URL은 최대 5개까지 추가할 수 있어요.")
     .optional(),
   subject: aiDraftSubjectSchema.optional(),
+  bodyModel: aiDraftBodyModelSchema.optional(),
   chatGptModel: z.string().trim().min(1).max(100).optional(),
 });
 

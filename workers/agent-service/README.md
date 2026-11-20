@@ -8,6 +8,19 @@
 
 ChatGPT 계정 연결에는 로컬 관리자 개발 서버의 3001번 포트와 Agent Worker의 8789번 포트를 사용합니다. OpenAI API 키 없이 계정을 연결할 수 있습니다. [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source) · [ChatGPT 사용량 및 앱 관리](https://chatgpt.com/settings/usage)
 
+### OpenAI·Claude API로 본문 작성
+
+**AI 글쓰기 → 제목·본문 작성 모델**에서 OpenAI는 GPT-6 Luna, GPT-5.4 mini, GPT-6.1 Terra, GPT-6.2 Sol·Astra를, Claude는 Haiku·Sonnet·Opus 5.5를 지원합니다. 연결한 API 키로 모델 목록을 조회해 선택할 수 있는 항목만 표시합니다. 각 제공자는 독립적으로 설정합니다. 목차와 SEO, 이미지, 검증은 기존 Workers AI 흐름을 사용합니다. 참고 URL과 별도로 설정한 Ceramic 검색의 출처도 기존과 같이 사용합니다.
+
+운영에서 사용하려면 이 기능이 담긴 Agent와 관리자 Worker를 배포하고, 저장소 루트에서 필요한 키를 해당 Worker 시크릿에 등록합니다. CLI 프롬프트에 값을 입력합니다. API 사용량은 각 제공자의 API 계정에 기록됩니다. [OpenAI API 시작하기](https://developers.openai.com/api/docs/quickstart) · [Claude API 인증](https://platform.claude.com/docs/en/manage-claude/authentication)
+
+```sh
+node scripts/run-tool.mjs wrangler secret put OPENAI_API_KEY --config workers/agent-service/wrangler.jsonc
+node scripts/run-tool.mjs wrangler secret put ANTHROPIC_API_KEY --config workers/agent-service/wrangler.jsonc
+```
+
+로컬에서 테스트하려면 사용할 키를 Git에서 제외된 `workers/agent-service/.dev.vars`에 넣고 Agent를 재시작합니다. 관리자를 새로고침해 모델을 선택한 뒤 **대상 확인 → 이 대상으로 초안 생성**으로 확인합니다. 모델 호출이 실패하면 오류를 표시하고 다른 모델로 자동 전환하지 않습니다.
+
 ### 출처 기반 생성 설정
 
 별도 검색과 사실 검증을 테스트할 때는 Agent Worker에 `AI_DRAFT_SOURCE_CHECK="true"`와 `CERAMIC_API_KEY`를 함께 설정합니다. 로컬에서는 `workers/agent-service/.dev.vars`를 사용합니다. Worker가 Ceramic.ai에서 찾은 페이지를 읽고, 원문 인용과 초안을 대조하는 별도 모델 호출을 수행합니다. 검사에 통과한 초안에는 원문 링크가 포함됩니다. [Ceramic.ai 검색 API](https://docs.ceramic.ai/api-reference/search)

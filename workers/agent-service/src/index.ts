@@ -18,6 +18,7 @@ import {
 } from "@cloudflare-ai-blog/shared";
 import { findPublishedLinkCandidates } from "@cloudflare-ai-blog/database/public-blog";
 import { suggestDraftSubject } from "./generate-draft";
+import { hasDraftModelKey, listDraftProviders } from "./external-draft-body";
 import { addInternalLinks, internalLinkTerms } from "./internal-links";
 import { prepareDraft } from "./prepare-draft";
 import { generatePostImages } from "./generate-cover";
@@ -338,7 +339,12 @@ async function suggestSavedPostSeo(request: Request, env: AgentServiceEnv) {
 
 export default {
   async fetch(request: Request, env: AgentServiceEnv) {
-    const { pathname } = new URL(request.url);
+    const { pathname, origin } = new URL(request.url);
+    if (request.method === "GET" && pathname === "/draft-providers") {
+      if (request.headers.has("origin"))
+        return new Response(null, { status: 403 });
+      return Response.json({ providers: await listDraftProviders(env) });
+    }
     if (
       request.method !== "POST" ||
       !["/drafts", "/post-qa", "/post-seo"].includes(pathname)
@@ -363,8 +369,19 @@ export default {
       );
 
     const { blogId, ...draftRequest } = input.data;
-    const local = new URL(request.url).origin === "http://127.0.0.1:8789";
-    if (local && draftRequest.subject && !draftRequest.chatGptTicket)
+    const { bodyModel, subject, chatGptTicket } = draftRequest;
+    const local = origin === "http://127.0.0.1:8789";
+    if (bodyModel && (!subject || chatGptTicket))
+      return Response.json(
+        { error: "본문 작성 모델을 하나만 선택해 주세요." },
+        { status: 400 },
+      );
+    if (bodyModel && !hasDraftModelKey(env, bodyModel))
+      return Response.json(
+        { error: "선택한 API 모델의 연결이 설정되지 않았어요." },
+        { status: 503 },
+      );
+    if (local && subject && !bodyModel && !chatGptTicket)
       return Response.json(
         {
           error:
@@ -372,7 +389,7 @@ export default {
         },
         { status: 400 },
       );
-    if (draftRequest.chatGptTicket && !local)
+    if (chatGptTicket && !local)
       return Response.json(
         { error: "ChatGPT 본문 생성은 로컬에서 사용할 수 있어요." },
         { status: 403 },

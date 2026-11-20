@@ -1,6 +1,7 @@
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import {
   aiDraftSubjectSuggestionSchema,
+  draftProviderForModel,
   postInputSchema,
   type AgentDraftRequest,
   type AiDraftRequest,
@@ -16,6 +17,7 @@ import {
   type GroundedParagraph,
 } from "./draft-evidence";
 import editorialGuide from "./editorial-guide.md";
+import { generateExternalDraftBody } from "./external-draft-body";
 import {
   collectChatGptSources,
   collectReferenceSources,
@@ -152,16 +154,42 @@ export async function generate<T extends z.ZodType>(
   input: object,
   maxOutputTokens: number,
   editorialFeedback?: string,
-  chatGptTicket?: string,
+  writer?: Pick<AgentDraftRequest, "chatGptTicket" | "bodyModel">,
 ): Promise<z.output<T>> {
-  const { $schema, ...format } = z.toJSONSchema(schema);
+  const { $schema, ...format } = z.toJSONSchema(schema, {
+    override({ jsonSchema }) {
+      if (
+        !writer?.bodyModel ||
+        draftProviderForModel(writer.bodyModel) !== "anthropic"
+      )
+        return;
+      // Claude accepts the shape; Zod still enforces these limits after generation.
+      delete jsonSchema.minLength;
+      delete jsonSchema.maxLength;
+      delete jsonSchema.maxItems;
+    },
+  });
   const prompt = editorialFeedback
     ? `${instructions} Before returning the JSON, apply this correction: ${editorialFeedback}`
     : instructions;
   const context = JSON.stringify(input);
   let content: string | undefined;
-  if (chatGptTicket) {
-    content = await generateChatGptBody(chatGptTicket, prompt, context, format);
+  if (writer?.chatGptTicket) {
+    content = await generateChatGptBody(
+      writer.chatGptTicket,
+      prompt,
+      context,
+      format,
+    );
+  } else if (writer?.bodyModel) {
+    content = await generateExternalDraftBody(
+      env,
+      writer.bodyModel,
+      prompt,
+      context,
+      format,
+      maxOutputTokens,
+    );
   } else {
     content = await generateWorkersAi(
       env,
@@ -717,7 +745,7 @@ export async function generateDraft(
         },
         5000,
         feedback,
-        request.chatGptTicket,
+        request,
       );
       return removeRepeatedSentences(
         draft,
