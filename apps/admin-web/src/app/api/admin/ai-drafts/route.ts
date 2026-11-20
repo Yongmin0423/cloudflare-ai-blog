@@ -1,6 +1,5 @@
 import { ManagementError } from "@cloudflare-ai-blog/database";
 import {
-  aiDraftProvidersResponseSchema,
   aiDraftRequestSchema,
   aiDraftResponseSchema,
 } from "@cloudflare-ai-blog/shared";
@@ -13,10 +12,7 @@ import {
   releaseChatGptTicket,
 } from "@/lib/chatgpt";
 
-async function fetchDraftAgent(
-  path: "/drafts" | "/draft-providers",
-  init?: RequestInit,
-) {
+async function fetchDraftAgent(path: "/drafts", init?: RequestInit) {
   const isDevelopment = process.env.NODE_ENV === "development";
   try {
     if (isDevelopment) return await fetch(`http://127.0.0.1:8789${path}`, init);
@@ -32,21 +28,6 @@ async function fetchDraftAgent(
   }
 }
 
-export async function GET(request: Request) {
-  try {
-    await guard(request);
-    const response = await fetchDraftAgent("/draft-providers");
-    const result = aiDraftProvidersResponseSchema.safeParse(
-      await response.json().catch(() => null),
-    );
-    if (!response.ok || !result.success)
-      throw new ManagementError(502, "API 모델 설정을 확인하지 못했어요.");
-    return json(result.data);
-  } catch (error) {
-    return apiError(error);
-  }
-}
-
 export async function POST(request: Request) {
   let chatGptTicket: string | undefined;
   try {
@@ -55,6 +36,11 @@ export async function POST(request: Request) {
       request,
       aiDraftRequestSchema,
     );
+    if (input.bodyModel)
+      throw new ManagementError(
+        400,
+        "구독 작성은 로컬 실행기를 연결해 주세요.",
+      );
     const localChatGpt = isLocalChatGptRequest(request);
     if (
       process.env.NODE_ENV === "development" &&

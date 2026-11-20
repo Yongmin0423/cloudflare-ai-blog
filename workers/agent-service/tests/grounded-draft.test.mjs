@@ -1571,3 +1571,58 @@ test("subject identification returns a reviewable suggestion without writing an 
     assert.equal(calls, 1);
   }
 });
+
+test("subscription articles keep their author's text and sources, and only call Workers AI for SEO during preparation", async (t) => {
+  t.mock.method(globalThis, "fetch", () =>
+    assert.fail("unexpected external API request"),
+  );
+  const url = "https://example.org/report";
+  for (const provider of ["claude", "chatgpt"]) {
+    const calls = [];
+    const env = {
+      AI: {
+        run: async (_model, request) => {
+          calls.push(request.response_format.json_schema.name);
+          return {
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  content: JSON.stringify({
+                    seoTitle: "키보드 선택",
+                    seoDescription: "키보드 선택 기준을 정리합니다.",
+                  }),
+                },
+              },
+            ],
+          };
+        },
+      },
+    };
+    const draft = await prepareDraft(
+      env,
+      {
+        requestId: crypto.randomUUID(),
+        categoryId: null,
+        subscriptionArticle: {
+          provider,
+          title: "키보드 선택",
+          introduction: "안내",
+          sections: [
+            { heading: "선택 기준", paragraphs: ["작성한 문장을 보존합니다."] },
+          ],
+          sources: [url],
+        },
+      },
+      {},
+      null,
+    );
+    assert.deepEqual(calls, ["post_seo"]);
+    assert.equal(draft.content.content[1].type, "heading");
+    assert.equal(
+      draft.content.content[2].content[0].text,
+      "작성한 문장을 보존합니다.",
+    );
+    assert.equal(draft.content.content[3].content[0].marks[0].attrs.href, url);
+  }
+});

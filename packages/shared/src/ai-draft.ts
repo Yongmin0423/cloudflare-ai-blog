@@ -119,10 +119,28 @@ export const aiDraftRequestSchema = z.strictObject({
   chatGptModel: z.string().trim().min(1).max(100).optional(),
 });
 
+export const subscriptionProviderSchema = z.enum(["chatgpt", "claude"]);
+export const subscriptionArticleSchema = z.strictObject({
+  provider: subscriptionProviderSchema,
+  title: z.string().trim().min(1).max(200),
+  introduction: z.string().trim().max(3000),
+  sections: z
+    .array(
+      z.strictObject({
+        heading: z.string().trim().min(1).max(200),
+        paragraphs: z.array(z.string().trim().min(1).max(4000)).min(1).max(20),
+      }),
+    )
+    .min(1)
+    .max(20),
+  sources: z.array(referenceUrlSchema).max(20),
+});
+
 export const agentDraftRequestSchema = aiDraftRequestSchema
   .omit({ chatGptModel: true })
   .extend({
     blogId: z.string().uuid(),
+    subscriptionArticle: subscriptionArticleSchema.optional(),
     chatGptTicket: z
       .string()
       .regex(/^[\w-]{43}$/)

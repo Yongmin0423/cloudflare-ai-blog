@@ -6,9 +6,6 @@ import { useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import {
   aiDraftBodyModels,
-  aiDraftBodyModelSchema,
-  aiDraftBodyProviderSchema,
-  aiDraftProvidersResponseSchema,
   aiDraftReferenceUrlLimit,
   aiDraftReferenceUrlMaxLength,
   aiDraftRequestSchema,
@@ -16,15 +13,35 @@ import {
   aiDraftSubjectTypeSchema,
   type AiDraftSubjectSuggestion,
   type AiDraftSubjectType,
-  type AiDraftBodyModel,
   categoriesResponseSchema,
   chatGptStatusSchema,
   settingsResponseSchema,
   validationMessages,
 } from "@cloudflare-ai-blog/shared";
-import { useApiResource } from "@/features/management/use-api-resource";
+import {
+  request as apiRequest,
+  useApiResource,
+} from "@/features/management/use-api-resource";
 
-const providerLabels = { openai: "OpenAI API", anthropic: "Claude API" };
+const subscriptionsUrl = "/api/admin/subscription-drafts";
+const jobStates = {
+  queued: "맥 대기 중",
+  writing: "작성 중",
+  saving: "이미지 준비 및 저장 중",
+  saved: "초안 저장",
+  failed: "실패",
+};
+const jobsSchema = z.object({
+  jobs: z.array(
+    z.object({
+      id: z.uuid(),
+      provider: z.enum(["chatgpt", "claude"]),
+      keyword: z.string(),
+      state: z.enum(["queued", "writing", "saving", "saved", "failed"]),
+      error: z.string().nullable(),
+    }),
+  ),
+});
 
 const subjectTypeLabels = {
   general: "일반 주제",
@@ -244,9 +261,12 @@ export function AiWriting({
     "/api/admin/settings",
     settingsResponseSchema,
   );
-  const draftProviders = useApiResource(
-    "/api/admin/ai-drafts",
-    aiDraftProvidersResponseSchema,
+  const jobs = useApiResource(subscriptionsUrl, jobsSchema);
+  const [subscriptionModel, setSubscriptionModel] = useState("");
+  const [runnerKey, setRunnerKey] = useState("");
+  const [queued, setQueued] = useState(false);
+  const [provider, setProvider] = useState(
+    localChatGpt ? "default" : "chatgpt",
   );
   const [keyword, setKeyword] = useState("");
   const [subject, setSubject] = useState<AiDraftSubjectSuggestion | null>(null);
@@ -255,7 +275,7 @@ export function AiWriting({
   const [referenceFields, setReferenceFields] = useState([{ id: 0, url: "" }]);
   const nextReferenceFieldId = useRef(1);
   const [chatGptModel, setChatGptModel] = useState("");
-  const [bodyModel, setBodyModel] = useState<AiDraftBodyModel>();
+
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [draft, setDraft] = useState<{ id: string; title: string } | null>(
@@ -265,7 +285,7 @@ export function AiWriting({
   const submitting = useRef(false);
   const writing = settings.data?.settings;
   const ready = !!writing && !!categories.data;
-  const usingChatGpt = localChatGpt && !bodyModel;
+  const usingChatGpt = localChatGpt && provider === "default";
   const needsChatGpt = usingChatGpt && !!subject && !chatGptModel;
   const referenceUrls = referenceFields
     .map(({ url }) => url.trim())
@@ -273,6 +293,7 @@ export function AiWriting({
 
   function edited() {
     requestId.current = null;
+    setQueued(false);
     setDraft(null);
     setError("");
   }
@@ -289,7 +310,7 @@ export function AiWriting({
       instructions,
       referenceUrls: referenceUrls.length ? referenceUrls : undefined,
       subject: subject ?? undefined,
-      bodyModel: subject ? bodyModel : undefined,
+
       chatGptModel:
         subject && usingChatGpt && chatGptModel ? chatGptModel : undefined,
     });
@@ -302,6 +323,17 @@ export function AiWriting({
     setPending(true);
     setError("");
     try {
+      if (subject && provider !== "default") {
+        await apiRequest(subscriptionsUrl, z.object({ id: z.uuid() }), "POST", {
+          action: "enqueue",
+          model: subscriptionModel || undefined,
+          provider,
+          input: parsed.data,
+        });
+        setQueued(true);
+        jobs.reload();
+        return;
+      }
       const response = await fetch("/api/admin/ai-drafts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -371,51 +403,50 @@ export function AiWriting({
             <label>
               제목·본문 작성 모델
               <select
-                value={bodyModel ?? "default"}
+                value={provider}
                 disabled={pending}
                 onChange={(event) => {
-                  const model = aiDraftBodyModelSchema.safeParse(
-                    event.target.value,
-                  );
-                  setBodyModel(model.success ? model.data : undefined);
+                  setProvider(event.target.value);
+                  setSubscriptionModel("");
                   edited();
                 }}
               >
+                <option value="chatgpt">ChatGPT 구독 · 맥의 Codex</option>
+                <option value="claude">Claude 구독 · 맥의 Claude Code</option>
                 <option value="default">
-                  {localChatGpt ? "ChatGPT 구독" : "Cloudflare Workers AI"}
+                  {localChatGpt
+                    ? "ChatGPT 구독 · 로컬 관리자"
+                    : "Cloudflare Workers AI"}
                 </option>
-                {aiDraftBodyProviderSchema.options.map((provider) => {
-                  const group = draftProviders.data?.providers.find(
-                    (entry) => entry.provider === provider,
-                  );
-                  const models = aiDraftBodyModels.filter(({ id }) =>
-                    group?.models.includes(id),
-                  );
-                  const empty = draftProviders.loading
-                    ? "확인 중"
-                    : draftProviders.error || group?.status === "unavailable"
-                      ? "목록을 불러오지 못함"
-                      : group?.status === "ready"
-                        ? "선택 가능한 모델 없음"
-                        : "설정 필요";
-                  return (
-                    <optgroup key={provider} label={providerLabels[provider]}>
-                      {models.length ? (
-                        models.map(({ id, label }) => (
-                          <option key={id} value={id}>
-                            {label}
-                          </option>
-                        ))
-                      ) : (
-                        <option value={provider} disabled>
-                          {empty}
-                        </option>
-                      )}
-                    </optgroup>
-                  );
-                })}
               </select>
             </label>
+            {provider !== "default" && (
+              <label>
+                구독 모델
+                <input
+                  list="subscription-models"
+                  placeholder="구독 CLI 기본 모델"
+                  maxLength={80}
+                  pattern="[a-zA-Z0-9][a-zA-Z0-9._\-]*"
+                  value={subscriptionModel}
+                  disabled={pending}
+                  onChange={(e) => {
+                    setSubscriptionModel(e.target.value);
+                    edited();
+                  }}
+                />
+                <datalist id="subscription-models">
+                  {(provider === "claude"
+                    ? ["haiku", "sonnet", "opus"]
+                    : aiDraftBodyModels
+                        .filter((item) => item.provider === "openai")
+                        .map((item) => item.id)
+                  ).map((id) => (
+                    <option key={id} value={id} />
+                  ))}
+                </datalist>
+              </label>
+            )}
             {usingChatGpt && (
               <ChatGptOptions
                 model={chatGptModel}
@@ -599,17 +630,24 @@ export function AiWriting({
             {needsChatGpt && <p>초안을 작성할 ChatGPT 모델을 선택해 주세요.</p>}
             <Button
               type="submit"
-              disabled={!ready || needsChatGpt || pending || !!draft}
+              disabled={!ready || needsChatGpt || pending || !!draft || queued}
             >
               {subject
                 ? usingChatGpt
                   ? referenceUrls.length
                     ? "참고 URL과 웹 검색으로 초안 생성"
                     : "출처 검색하고 초안 생성"
-                  : "이 대상으로 초안 생성"
+                  : provider === "default"
+                    ? "이 대상으로 초안 생성"
+                    : "구독 작성 요청"
                 : "대상 확인"}
             </Button>
           </form>
+          {queued && (
+            <p role="status">
+              맥에서 작성할 작업을 등록했어요. 구독 작업 목록에서 확인하세요.
+            </p>
+          )}
           {pending && (
             <p role="status">
               {subject
@@ -642,6 +680,91 @@ export function AiWriting({
           )}
         </section>
         <aside className="settings-card">
+          <h2>구독 작업</h2>
+          <p>
+            ChatGPT는 맥에서 실행 중인 작업기가 처리해요. Claude는 맥에서 Claude
+            Code로 직접 작성해요.
+          </p>
+          <button type="button" onClick={jobs.reload}>
+            작업 목록 새로고침
+          </button>
+          {jobs.error && <p role="alert">{jobs.error}</p>}
+          <ul>
+            {jobs.data?.jobs.map((job) => (
+              <li key={job.id}>
+                {job.keyword} ·{" "}
+                {job.provider === "claude" ? "Claude" : "ChatGPT"} ·{" "}
+                {jobStates[job.state]} {job.error}
+                {job.state === "saved" && (
+                  <Link href={`/posts/${job.id}/edit`}> 초안 열기</Link>
+                )}
+                {(job.state === "failed" ||
+                  job.state === "writing" ||
+                  job.state === "saving") && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await apiRequest(
+                          subscriptionsUrl,
+                          z.object({ ok: z.boolean() }),
+                          "POST",
+                          { action: "retry", id: job.id },
+                        );
+                        jobs.reload();
+                      } catch (e) {
+                        setError(
+                          e instanceof Error
+                            ? e.message
+                            : "다시 요청하지 못했어요.",
+                        );
+                      }
+                    }}
+                  >
+                    다시 대기열에 넣기
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <details>
+            <summary>맥 실행기 연결</summary>
+            <p>
+              프로젝트 폴더에서 <code>pnpm subscription:runner pair</code>를
+              실행하고 관리자 주소와 연결 키를 입력하세요. 키를 새로 발급하면
+              이전 키가 만료돼요.
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const { key } = await apiRequest(
+                    subscriptionsUrl,
+                    z.object({ key: z.string() }),
+                    "POST",
+                    { action: "pair" },
+                  );
+                  setRunnerKey(key);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "연결 실패");
+                }
+              }}
+            >
+              연결 키 발급
+            </button>
+            {runnerKey && (
+              <input
+                aria-label="맥 실행기 연결 키"
+                readOnly
+                value={runnerKey}
+                onFocus={(event) => event.target.select()}
+              />
+            )}
+            <p>
+              GPT 작업은 <code>pnpm subscription:runner watch</code>, Claude
+              작업은 <code>pnpm subscription:runner claude</code>로 시작하세요.
+            </p>
+          </details>
           <h2>작성 기본값</h2>
           <dl className="settings-summary">
             <dt>블로그</dt>
