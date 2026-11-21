@@ -1,6 +1,7 @@
 "use client";
 
 import type { Editor } from "@tiptap/react";
+import { SubscriptionRevision } from "./subscription-revision";
 import { revisionPassages } from "./ai-revision-passage";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
@@ -23,14 +24,17 @@ type RevisionTargets = ReturnType<typeof revisionPassages>;
 export function AiRevision({
   editor,
   title,
+  postId,
   disabled,
   onApplied,
 }: {
+  postId: string;
   editor: Editor | null;
   title: string;
   disabled: boolean;
   onApplied: () => void;
 }) {
+  const [localPassage, setLocalPassage] = useState(false);
   const [open, setOpen] = useState(false);
   const [targets, setTargets] = useState<RevisionTargets | null>(null);
 
@@ -58,11 +62,32 @@ export function AiRevision({
         <DialogHeader>
           <DialogTitle>AI로 본문 다듬기</DialogTitle>
           <DialogDescription>
-            현재 초안에서 다듬을 문단을 고르고 수정안을 확인해요.
+            글의 구성, 문장, 이미지에 대한 지시를 입력하고 수정안을 검토해요.
           </DialogDescription>
         </DialogHeader>
+        {process.env.NODE_ENV === "development" && (
+          <label>
+            <input
+              type="checkbox"
+              checked={localPassage}
+              onChange={(e) => setLocalPassage(e.target.checked)}
+            />{" "}
+            로컬 문장 단위 수정
+          </label>
+        )}
         {open &&
-          (editor && targets?.passages.length ? (
+          (editor && targets && !localPassage ? (
+            <SubscriptionRevision
+              editor={editor}
+              title={title}
+              postId={postId}
+              targets={targets}
+              onApplied={() => {
+                setOpen(false);
+                onApplied();
+              }}
+            />
+          ) : editor && targets?.passages.length ? (
             <RevisionForm
               editor={editor}
               title={title}

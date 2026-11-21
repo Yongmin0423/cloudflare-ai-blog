@@ -34,7 +34,7 @@ function articleSections(nodes: EditorNode[]) {
   return sections.filter(({ body }) => body.length > 0);
 }
 
-async function generateImage(
+export async function generateImage(
   env: AgentServiceEnv,
   { prompt, alt }: z.infer<typeof imageBriefSchema>,
 ) {

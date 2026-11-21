@@ -1081,8 +1081,9 @@ function EditorForm({
                 false,
                 !state?.redo,
               )}
-              {post && process.env.NODE_ENV === "development" && (
+              {post && (
                 <AiRevision
+                  postId={post.id}
                   editor={editor}
                   title={fields.title}
                   disabled={
