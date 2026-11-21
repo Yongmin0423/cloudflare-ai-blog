@@ -440,7 +440,13 @@ export default {
         { error: "선택한 API 모델의 연결이 설정되지 않았어요." },
         { status: 503 },
       );
-    if (local && subject && !bodyModel && !chatGptTicket)
+    if (
+      local &&
+      subject &&
+      !bodyModel &&
+      !chatGptTicket &&
+      !draftRequest.subscriptionArticle
+    )
       return Response.json(
         {
           error:
