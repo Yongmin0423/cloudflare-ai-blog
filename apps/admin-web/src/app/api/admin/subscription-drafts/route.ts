@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     const { db, blogId } = await guard(request);
     const { results } = await db
       .prepare(
-        "SELECT id,provider,json_extract(input_json,'$.keyword') AS keyword,state,error FROM subscription_drafts WHERE blog_id=? ORDER BY updated_at DESC LIMIT 20",
+        "SELECT id,provider,json_extract(input_json,'$.keyword') AS keyword,state,error FROM subscription_drafts WHERE blog_id=? AND json_extract(input_json,'$.kind') IS NULL ORDER BY updated_at DESC LIMIT 20",
       )
       .bind(blogId)
       .all();

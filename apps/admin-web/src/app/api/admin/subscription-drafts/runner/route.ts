@@ -4,6 +4,8 @@ import { ManagementError } from "@cloudflare-ai-blog/database";
 import {
   subscriptionProviderSchema,
   subscriptionArticleSchema,
+  subscriptionRevisionResultSchema,
+  validRevisionLayout,
   aiDraftResponseSchema,
 } from "@cloudflare-ai-blog/shared";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
@@ -14,12 +16,18 @@ const job = { id: z.uuid(), claim: z.uuid() };
 const schema = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("next"),
+    revisions: z.boolean().optional(),
     provider: subscriptionProviderSchema,
   }),
   z.strictObject({
     action: z.literal("finish"),
     ...job,
     article: subscriptionArticleSchema,
+  }),
+  z.strictObject({
+    action: z.literal("finishRevision"),
+    ...job,
+    result: subscriptionRevisionResultSchema,
   }),
   z.strictObject({
     action: z.literal("fail"),
@@ -49,9 +57,16 @@ export async function POST(request: Request) {
       const claim = randomUUID();
       const row = await db
         .prepare(
-          `UPDATE subscription_drafts SET state='writing',claim=?,updated_at=? WHERE blog_id=? AND id=(SELECT id FROM subscription_drafts WHERE blog_id=? AND provider=? AND state='queued' ORDER BY updated_at,id LIMIT 1) AND state='queued' RETURNING id,input_json`,
+          `UPDATE subscription_drafts SET state='writing',claim=?,updated_at=? WHERE blog_id=? AND id=(SELECT id FROM subscription_drafts WHERE blog_id=? AND provider=? AND state='queued' AND (?=1 OR json_extract(input_json,'$.kind') IS NULL) ORDER BY updated_at,id LIMIT 1) AND state='queued' RETURNING id,input_json`,
         )
-        .bind(claim, Date.now(), blogId, blogId, data.provider)
+        .bind(
+          claim,
+          Date.now(),
+          blogId,
+          blogId,
+          data.provider,
+          data.revisions ? 1 : 0,
+        )
         .first<{ id: string; input_json: string }>();
       return json({
         job: row
@@ -79,9 +94,32 @@ export async function POST(request: Request) {
         .run();
       return json({ ok: true });
     }
+    const input = JSON.parse(row.input_json);
+    if (data.action === "finishRevision") {
+      if (input.kind !== "revision")
+        throw new ManagementError(409, "본문 수정 작업이 아니에요.");
+      if (!validRevisionLayout(input.revision.blocks.length, data.result))
+        throw new ManagementError(400, "수정 대상이 요청과 일치하지 않아요.");
+      const updated = await db
+        .prepare(
+          "UPDATE subscription_drafts SET input_json=json_set(input_json,'$.result',json(?)),state='saved',error=NULL,updated_at=? WHERE blog_id=? AND id=? AND claim=? AND state='writing'",
+        )
+        .bind(
+          JSON.stringify(data.result),
+          Date.now(),
+          blogId,
+          data.id,
+          data.claim,
+        )
+        .run();
+      if (!updated.meta.changes)
+        throw new ManagementError(409, "작업 상태가 변경됐어요.");
+      return json({ id: data.id });
+    }
+    if (input.kind === "revision")
+      throw new ManagementError(400, "본문 수정 결과가 필요해요.");
     if (row.provider !== data.article.provider)
       throw new ManagementError(400, "구독 종류가 다릅니다.");
-    const input = JSON.parse(row.input_json);
     delete input.writing;
     delete input.model;
     const init = {

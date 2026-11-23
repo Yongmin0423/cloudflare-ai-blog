@@ -10,6 +10,7 @@ import {
   startAiDraftJob,
 } from "@cloudflare-ai-blog/database";
 import {
+  revisionImageSchema,
   agentDraftRequestSchema,
   agentPostQaRequestSchema,
   agentPostSeoRequestSchema,
@@ -25,7 +26,8 @@ import { suggestDraftSubject } from "./generate-draft";
 import { hasDraftModelKey, listDraftProviders } from "./external-draft-body";
 import { addInternalLinks, internalLinkTerms } from "./internal-links";
 import { prepareDraft } from "./prepare-draft";
-import { generatePostImages } from "./generate-cover";
+import { collectReferenceSources } from "./research-sources";
+import { generateImage, generatePostImages } from "./generate-cover";
 import { reviewPost } from "./review-post";
 import { suggestPostSeo } from "./suggest-post-seo";
 
@@ -406,7 +408,9 @@ export default {
     }
     if (
       request.method !== "POST" ||
-      !["/drafts", "/post-qa", "/post-seo"].includes(pathname)
+      !["/drafts", "/post-qa", "/post-seo", "/revision-image"].includes(
+        pathname,
+      )
     )
       return new Response(null, { status: 404 });
     if (
@@ -415,6 +419,46 @@ export default {
     )
       return new Response(null, { status: 403 });
 
+    if (pathname === "/revision-image") {
+      const plan = revisionImageSchema.safeParse(
+        await request.json().catch(() => null),
+      );
+      if (!plan.success)
+        return Response.json(
+          { error: "이미지 요청 형식을 확인해 주세요." },
+          { status: 400 },
+        );
+      try {
+        if (plan.data.kind === "source") {
+          const [page] = await collectReferenceSources(env.AI, [
+            plan.data.pageUrl,
+          ]);
+          if (!page.images?.length)
+            throw new ManagementError(
+              422,
+              "원문에서 사용할 수 있는 이미지를 찾지 못했어요.",
+            );
+          return Response.json({ images: page.images });
+        }
+        const { bytes } = await generateImage(env, plan.data);
+        return new Response(bytes, {
+          headers: {
+            "Content-Type": "image/jpeg",
+            "Cache-Control": "no-store",
+          },
+        });
+      } catch (error) {
+        return Response.json(
+          {
+            error:
+              error instanceof ManagementError
+                ? error.message
+                : "이미지를 준비하지 못했어요. 다시 시도해 주세요.",
+          },
+          { status: error instanceof ManagementError ? error.status : 503 },
+        );
+      }
+    }
     if (pathname === "/post-qa") return reviewSavedPost(request, env);
     if (pathname === "/post-seo") return suggestSavedPostSeo(request, env);
 

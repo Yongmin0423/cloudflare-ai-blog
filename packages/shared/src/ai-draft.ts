@@ -188,3 +188,73 @@ export type AiDraftSubjectSuggestion = z.infer<
   typeof aiDraftSubjectSuggestionSchema
 >;
 export type AiDraftSubjectType = z.infer<typeof aiDraftSubjectTypeSchema>;
+
+export const subscriptionRevisionInputSchema = z.strictObject({
+  title: z.string().max(200),
+  instructions: aiRevisionRequestSchema.shape.instructions,
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  blocks: z
+    .array(
+      z.strictObject({ type: z.string().max(60), text: z.string().max(20000) }),
+    )
+    .min(1)
+    .max(300),
+});
+const originalIndex = z.number().int().min(0).max(299);
+const alt = z.string().trim().min(1).max(500);
+export const revisionImageSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("source"),
+    pageUrl: referenceUrlSchema,
+    imageUrl: referenceUrlSchema.optional(),
+    alt,
+  }),
+  z.strictObject({
+    kind: z.literal("generate"),
+    prompt: z.string().trim().min(1).max(1200),
+    alt,
+  }),
+]);
+export const subscriptionRevisionResultSchema = z.strictObject({
+  layout: z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.strictObject({ kind: z.literal("keep"), index: originalIndex }),
+        z.strictObject({
+          kind: z.enum(["paragraph", "heading"]),
+          text: z.string().trim().min(1).max(20000),
+        }),
+        ...revisionImageSchema.options,
+      ]),
+    )
+    .min(1)
+    .max(350),
+  removed: z.array(originalIndex).max(300),
+});
+export function validRevisionLayout(
+  count: number,
+  plan: z.infer<typeof subscriptionRevisionResultSchema>,
+) {
+  const indexes = [
+    ...plan.removed,
+    ...plan.layout.flatMap((item) =>
+      item.kind === "keep" ? [item.index] : [],
+    ),
+  ];
+  return (
+    indexes.length === count &&
+    new Set(indexes).size === count &&
+    indexes.every((index) => index < count) &&
+    plan.layout.filter(
+      (item) => item.kind === "source" || item.kind === "generate",
+    ).length <= 3
+  );
+}
+export const revisionJobSchema = z.object({
+  id: z.uuid(),
+  provider: subscriptionProviderSchema,
+  state: z.enum(["queued", "writing", "failed", "saved"]),
+  error: z.string().nullable(),
+  input: subscriptionRevisionInputSchema,
+  result: subscriptionRevisionResultSchema.nullable(),
+});
